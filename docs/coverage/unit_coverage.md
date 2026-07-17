@@ -13,7 +13,7 @@ cd target_app
 python -m pytest --cov=app --cov-report=term-missing
 ```
 
-## Orchestrator — 855 statements, 80.8% covered, 102 tests passing
+## Orchestrator — 941 statements, 78.0% covered, 109 tests passing
 
 The orchestrator's own code is deliberately held to the same test rigor as the
 target app — workflow orchestration is the #1 evaluation criterion, so a coverage
@@ -24,9 +24,10 @@ untested would undercut the thing actually being evaluated.
 |---|---|---|
 | `checkpointer.py` | 100.0% | Includes a real PostgresSaver durability test (skipped if Postgres unreachable) |
 | `graph.py` | 100.0% | Full StateGraph wiring — every routing function and the rollback helper, both in isolation and via 7 end-to-end scenarios |
+| `logging_config.py` | 100.0% | Idempotency and explicit-level-override tests |
 | `state.py` | 100.0% | |
 | `telemetry.py` | 100.0% | |
-| `tools.py` | 97.7% | 2 lines uncovered: an unreachable defensive branch |
+| `tools.py` | 98.0% | 2 lines uncovered: an unreachable defensive branch |
 | `metrics.py` | 97.6% | 1 line uncovered: a defensive edge case |
 | `nodes/architecture_design.py` | 100.0% | |
 | `nodes/decomposer_planner.py` | 100.0% | |
@@ -36,7 +37,7 @@ untested would undercut the thing actually being evaluated.
 | `nodes/requirement_clarifier.py` | 100.0% | |
 | `nodes/test_executor.py` | 100.0% | |
 | `nodes/codebase_reasoner.py` | 94.0% | A few lines in the keyword-scan loop's exception-handling paths |
-| `nodes/coder.py` | 77.3% | **Deliberate**: the live `claude` CLI subprocess call itself (`_invoke_claude_cli_once`, the retry wrapper) is excluded from the committed suite — see below |
+| `nodes/coder.py` | 76.5% | **Deliberate**: the live `claude` CLI subprocess call itself (`_invoke_claude_cli_once`, the retry wrapper, and their log calls) is excluded from the committed suite — see below |
 | `scenarios/*.py` | 0.0% | **Deliberate**: see below |
 
 ### Deliberate exclusions, not gaps

@@ -15,8 +15,8 @@ from genuine live-Claude runs, each independently verified by actually re-runnin
 Full Docker Compose deployment: `git clone && docker-compose up` runs all three
 demos end-to-end with no login, no key, and no manual setup.
 
-Rough numbers: 129 tests across two suites (102 orchestrator, 27 target app),
-80.8%/97% coverage respectively, ~50 commits mapping the build's actual phases.
+Rough numbers: 136 tests across two suites (109 orchestrator, 27 target app),
+78.0%/97% coverage respectively, ~50 commits mapping the build's actual phases.
 
 ## Plan and rationale
 

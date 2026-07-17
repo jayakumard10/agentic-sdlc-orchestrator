@@ -222,7 +222,7 @@ orchestrator/          LangGraph orchestration core
   fixtures/               Captured Coder transcripts + human gate decisions (replay data)
   scenarios/              Demo entry points + shared runner
   scripts/                 Fixture-capture tooling (host-only, not part of the reviewer path)
-  tests/                   Orchestrator's own test suite (102 tests, 80.8% coverage)
+  tests/                   Orchestrator's own test suite (109 tests, 78.0% coverage)
 target_app/             The URL shortener the orchestrator builds/evolves
   app/                    FastAPI application code
   tests/                  27 tests, 97% coverage
@@ -242,9 +242,9 @@ Two independent test suites, both checked into the repo and both exercised in CI
 fashion during development (see commit history — every commit that touches code
 was tested before landing):
 
-- **`orchestrator/tests/`** (102 tests, 80.8% coverage) — the orchestration logic
+- **`orchestrator/tests/`** (109 tests, 78.0% coverage) — the orchestration logic
   itself: state reducers under real parallel LangGraph writes, every node's
-  behavior including all four gate types, the full retry → fallback → rollback →
+  behavior including all five gate types, the full retry → fallback → rollback →
   safe-stop governance chain via both unit-level and end-to-end integration tests,
   and a real PostgreSQL checkpointer-durability test. Deliberately excludes the
   live `claude` CLI call itself (no auth/network dependency in a committed suite)
