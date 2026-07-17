@@ -1,0 +1,94 @@
+{
+  "scenario_type": "ambiguous",
+  "requirement_raw": "Make the service more reliable.",
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "code_files": {
+        "app/db.py": "\"\"\"Database engine/session setup: PostgreSQL by default, SQLite fallback behind the\n\nsame interface if POSTGRES_* environment variables aren't set (e.g. running without\nDocker). No Alembic - Base.metadata.create_all() on startup is the documented,\ndeliberate \"would add for production\" gap.\n\nReliability: pool_pre_ping=True makes the pool test each connection with a\nlightweight \"SELECT 1\" before handing it to a request, so a connection dropped by\nthe database or an intermediate proxy (idle timeout, restart) is transparently\nreplaced instead of surfacing as a request failure. Postgres connections also get a\nbounded connect_timeout so an unreachable database fails fast instead of hanging\nthe request indefinitely.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nfrom collections.abc import Iterator\n\nfrom sqlalchemy import create_engine\nfrom sqlalchemy.orm import DeclarativeBase, Session, sessionmaker\n\n\nclass Base(DeclarativeBase):\n    pass\n\n\ndef _database_url() -> str:\n    explicit = os.environ.get(\"DATABASE_URL\")\n    if explicit:\n        return explicit\n    user = os.environ.get(\"POSTGRES_USER\")\n    if not user:\n        return \"sqlite:///./url_shortener.db\"\n    password = os.environ.get(\"POSTGRES_PASSWORD\", \"\")\n    host = os.environ.get(\"POSTGRES_HOST\", \"postgres\")\n    port = os.environ.get(\"POSTGRES_PORT\", \"5432\")\n    database = os.environ.get(\"POSTGRES_DB\", \"orchestrator\")\n    return f\"postgresql+psycopg://{user}:{password}@{host}:{port}/{database}\"\n\n\ndef _connect_args(database_url: str) -> dict[str, object]:\n    if database_url.startswith(\"sqlite\"):\n        return {\"check_same_thread\": False}\n    return {\"connect_timeout\": 5}\n\n\ndef _engine_kwargs(database_url: str) -> dict[str, object]:\n    return {\"connect_args\": _connect_args(database_url), \"pool_pre_ping\": True}\n\n\n_DATABASE_URL = _database_url()\n\nengine = create_engine(_DATABASE_URL, **_engine_kwargs(_DATABASE_URL))\nSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)\n\n\ndef init_db() -> None:\n    Base.metadata.create_all(bind=engine)\n\n\ndef get_session() -> Iterator[Session]:\n    session = SessionLocal()\n    try:\n        yield session\n    finally:\n        session.close()\n",
+        "app/main.py": "\"\"\"FastAPI entry point: the URL shortener's core APIs, analytics, rate limiting,\nand additional reliability safeguards (DB-aware health checks, a stable error\ncontract for unhandled failures).\n\"\"\"\n\nfrom __future__ import annotations\n\nimport secrets\nimport string\nfrom collections.abc import AsyncIterator\nfrom contextlib import asynccontextmanager\n\nfrom fastapi import Depends, FastAPI, HTTPException, Request\nfrom fastapi.responses import JSONResponse, RedirectResponse\nfrom sqlalchemy import text\nfrom sqlalchemy.orm import Session\n\nfrom app import rate_limit\nfrom app.auth import require_api_key\nfrom app.db import get_session, init_db\nfrom app.repository import SQLAlchemyURLRepository, URLRepository\nfrom app.schemas import ShortenRequest, ShortenResponse, StatsResponse\n\n_CODE_ALPHABET = string.ascii_letters + string.digits\n_CODE_LENGTH = 7\n_MAX_CODE_GENERATION_ATTEMPTS = 10\n\n\n@asynccontextmanager\nasync def lifespan(app: FastAPI) -> AsyncIterator[None]:\n    init_db()\n    yield\n\n\napp = FastAPI(title=\"URL Shortener\", lifespan=lifespan)\n\n\n@app.exception_handler(Exception)\nasync def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:\n    \"\"\"Convert any unhandled exception into a stable JSON error contract instead of\n    a framework default page or an unhandled crash. Expected failures (404, 401,\n    422, 429) are raised as HTTPException/validation errors and are unaffected -\n    they're handled by FastAPI/Starlette's built-in handlers before reaching here.\n    \"\"\"\n    return JSONResponse(status_code=500, content={\"detail\": \"internal server error\"})\n\n\ndef get_repository(session: Session = Depends(get_session)) -> URLRepository:\n    return SQLAlchemyURLRepository(session)\n\n\ndef _generate_unique_code(repo: URLRepository) -> str:\n    for _ in range(_MAX_CODE_GENERATION_ATTEMPTS):\n        candidate = \"\".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))\n        if not repo.code_exists(candidate):\n            return candidate\n    raise HTTPException(status_code=500, detail=\"failed to generate a unique short code\")\n\n\n@app.get(\"/health\")\ndef health(session: Session = Depends(get_session)) -> JSONResponse:\n    try:\n        session.execute(text(\"SELECT 1\"))\n        database_status = \"ok\"\n    except Exception:\n        database_status = \"unreachable\"\n    healthy = database_status == \"ok\"\n    return JSONResponse(\n        status_code=200 if healthy else 503,\n        content={\"status\": \"ok\" if healthy else \"degraded\", \"database\": database_status},\n    )\n\n\n@app.post(\n    \"/shorten\",\n    response_model=ShortenResponse,\n    status_code=201,\n    dependencies=[Depends(require_api_key)],\n)\ndef shorten(\n    payload: ShortenRequest,\n    request: Request,\n    repo: URLRepository = Depends(get_repository),\n) -> ShortenResponse:\n    client_key = request.client.host if request.client else \"unknown\"\n    if not rate_limit.is_allowed(client_key):\n        raise HTTPException(status_code=429, detail=\"rate limit exceeded, try again later\")\n\n    code = _generate_unique_code(repo)\n    long_url = str(payload.long_url)\n    repo.create(code=code, long_url=long_url)\n    return ShortenResponse(code=code, short_url=f\"/{code}\", long_url=long_url)\n\n\n@app.get(\n    \"/{code}/stats\",\n    response_model=StatsResponse,\n    dependencies=[Depends(require_api_key)],\n)\ndef stats(code: str, repo: URLRepository = Depends(get_repository)) -> StatsResponse:\n    record = repo.get_by_code(code)\n    if record is None:\n        raise HTTPException(status_code=404, detail=\"short URL not found\")\n    return StatsResponse(\n        code=record.code,\n        long_url=record.long_url,\n        click_count=record.click_count,\n        created_at=record.created_at,\n    )\n\n\n@app.get(\"/{code}\")\ndef redirect(code: str, repo: URLRepository = Depends(get_repository)) -> RedirectResponse:\n    record = repo.get_by_code(code)\n    if record is None:\n        raise HTTPException(status_code=404, detail=\"short URL not found\")\n    repo.increment_click(code)\n    return RedirectResponse(url=record.long_url, status_code=307)\n",
+        "tests/test_db.py": "\"\"\"Unit tests for reliability-related database engine configuration.\"\"\"\n\nfrom __future__ import annotations\n\nfrom app.db import _connect_args, _database_url, _engine_kwargs\n\n\ndef test_sqlite_connect_args_disable_same_thread_check():\n    assert _connect_args(\"sqlite:///./url_shortener.db\") == {\"check_same_thread\": False}\n\n\ndef test_postgres_connect_args_set_a_bounded_connect_timeout():\n    url = \"postgresql+psycopg://user:pw@host:5432/db\"\n    assert _connect_args(url) == {\"connect_timeout\": 5}\n\n\ndef test_engine_kwargs_enable_pool_pre_ping_for_sqlite():\n    kwargs = _engine_kwargs(\"sqlite:///./url_shortener.db\")\n    assert kwargs[\"pool_pre_ping\"] is True\n    assert kwargs[\"connect_args\"] == {\"check_same_thread\": False}\n\n\ndef test_engine_kwargs_enable_pool_pre_ping_for_postgres():\n    url = \"postgresql+psycopg://user:pw@host:5432/db\"\n    kwargs = _engine_kwargs(url)\n    assert kwargs[\"pool_pre_ping\"] is True\n    assert kwargs[\"connect_args\"] == {\"connect_timeout\": 5}\n\n\ndef test_database_url_defaults_to_sqlite_without_postgres_env(monkeypatch):\n    monkeypatch.delenv(\"DATABASE_URL\", raising=False)\n    monkeypatch.delenv(\"POSTGRES_USER\", raising=False)\n    assert _database_url() == \"sqlite:///./url_shortener.db\"\n\n\ndef test_database_url_uses_explicit_override(monkeypatch):\n    monkeypatch.setenv(\"DATABASE_URL\", \"postgresql+psycopg://x:y@z:5432/db\")\n    assert _database_url() == \"postgresql+psycopg://x:y@z:5432/db\"\n\n\ndef test_database_url_builds_from_postgres_env(monkeypatch):\n    monkeypatch.delenv(\"DATABASE_URL\", raising=False)\n    monkeypatch.setenv(\"POSTGRES_USER\", \"app\")\n    monkeypatch.setenv(\"POSTGRES_PASSWORD\", \"secret\")\n    monkeypatch.setenv(\"POSTGRES_HOST\", \"db-host\")\n    monkeypatch.setenv(\"POSTGRES_PORT\", \"5433\")\n    monkeypatch.setenv(\"POSTGRES_DB\", \"shortener\")\n    assert _database_url() == \"postgresql+psycopg://app:secret@db-host:5433/shortener\"\n",
+        "tests/test_api.py": "\"\"\"Integration tests for the URL shortener's HTTP API.\"\"\"\n\nfrom __future__ import annotations\n\nfrom fastapi.testclient import TestClient\nfrom sqlalchemy.exc import OperationalError\n\nfrom app.db import get_session\nfrom app.main import app, get_repository\nfrom app.rate_limit import MAX_REQUESTS_PER_WINDOW\n\n\ndef test_health(client):\n    response = client.get(\"/health\")\n    assert response.status_code == 200\n    assert response.json() == {\"status\": \"ok\", \"database\": \"ok\"}\n\n\ndef test_health_reports_degraded_when_database_unreachable(client):\n    class FailingSession:\n        def execute(self, *args, **kwargs):\n            raise OperationalError(\"SELECT 1\", {}, Exception(\"connection refused\"))\n\n        def close(self) -> None:\n            pass\n\n    def override_with_failure():\n        yield FailingSession()\n\n    original_override = app.dependency_overrides[get_session]\n    app.dependency_overrides[get_session] = override_with_failure\n    try:\n        response = client.get(\"/health\")\n        assert response.status_code == 503\n        assert response.json() == {\"status\": \"degraded\", \"database\": \"unreachable\"}\n    finally:\n        app.dependency_overrides[get_session] = original_override\n\n\ndef test_unexpected_error_returns_generic_500(client):\n    class ExplodingRepository:\n        def get_by_code(self, code: str):\n            raise RuntimeError(\"boom\")\n\n    app.dependency_overrides[get_repository] = lambda: ExplodingRepository()\n    try:\n        with TestClient(app, raise_server_exceptions=False) as raw_client:\n            raw_client.headers.update(dict(client.headers))\n            response = raw_client.get(\"/doesnotexist/stats\")\n        assert response.status_code == 500\n        assert response.json() == {\"detail\": \"internal server error\"}\n    finally:\n        del app.dependency_overrides[get_repository]\n\n\ndef test_shorten_then_redirect_then_stats(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/some/page\"})\n    assert shorten_response.status_code == 201\n    body = shorten_response.json()\n    code = body[\"code\"]\n    assert body[\"long_url\"] == \"https://example.com/some/page\"\n\n    redirect_response = client.get(f\"/{code}\", follow_redirects=False)\n    assert redirect_response.status_code == 307\n    assert redirect_response.headers[\"location\"] == \"https://example.com/some/page\"\n\n    stats_response = client.get(f\"/{code}/stats\")\n    assert stats_response.status_code == 200\n    stats_body = stats_response.json()\n    assert stats_body[\"click_count\"] == 1\n    assert stats_body[\"code\"] == code\n\n\ndef test_redirect_unknown_code_returns_404(client):\n    response = client.get(\"/doesnotexist\")\n    assert response.status_code == 404\n\n\ndef test_stats_unknown_code_returns_404(client):\n    response = client.get(\"/doesnotexist/stats\")\n    assert response.status_code == 404\n\n\ndef test_shorten_rejects_invalid_url(client):\n    response = client.post(\"/shorten\", json={\"long_url\": \"not-a-url\"})\n    assert response.status_code == 422\n\n\ndef test_shorten_rate_limit_enforced(client):\n    for _ in range(MAX_REQUESTS_PER_WINDOW):\n        response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n        assert response.status_code == 201\n    limited_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    assert limited_response.status_code == 429\n\n\ndef test_shorten_requires_api_key(client):\n    client.headers.pop(\"X-API-Key\", None)\n    response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    assert response.status_code == 401\n\n\ndef test_shorten_rejects_wrong_api_key(client):\n    client.headers.update({\"X-API-Key\": \"not-the-right-key\"})\n    response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    assert response.status_code == 401\n\n\ndef test_stats_requires_api_key(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    code = shorten_response.json()[\"code\"]\n\n    client.headers.pop(\"X-API-Key\", None)\n    response = client.get(f\"/{code}/stats\")\n    assert response.status_code == 401\n\n\ndef test_redirect_does_not_require_api_key(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    code = shorten_response.json()[\"code\"]\n\n    client.headers.pop(\"X-API-Key\", None)\n    response = client.get(f\"/{code}\", follow_redirects=False)\n    assert response.status_code == 307\n",
+        "docs/RELIABILITY.md": "# Reliability\n\nThis tracks the reliability safeguards built into the URL shortener and where to\nfind them, so future changes don't accidentally duplicate or regress them.\n\n## Abuse / overload protection\n\n- **Rate limiting** (`app/rate_limit.py`): an in-process fixed-window limiter\n  guards `POST /shorten` (30 requests / 60s per client IP by default). It's\n  intentionally in-process (no Redis) for a single-container deployment. Any\n  future rate-limiting work should extend this module rather than add a second\n  limiter.\n\n## Database connection resilience\n\n- `app/db.py` builds the SQLAlchemy engine with `pool_pre_ping=True`, so a pooled\n  connection that went stale (dropped by the database, an idle-timeout proxy, or a\n  restart) is detected and transparently replaced before it's handed to a request,\n  instead of surfacing as a mid-request failure.\n- Postgres connections set a bounded `connect_timeout` (5s) so an unreachable\n  database fails fast instead of hanging the request indefinitely. SQLite is\n  unaffected (`check_same_thread=False` only, as before).\n\n## Health reporting\n\n- `GET /health` checks database connectivity (`SELECT 1`) in addition to process\n  liveness. It returns `200 {\"status\": \"ok\", \"database\": \"ok\"}` when the database\n  is reachable, and `503 {\"status\": \"degraded\", \"database\": \"unreachable\"}`\n  otherwise, so orchestration/monitoring can distinguish \"process is up\" from\n  \"service can actually serve requests.\"\n\n## Error handling contract\n\n- A catch-all exception handler in `app/main.py` converts any unhandled\n  server-side exception into a stable `500 {\"detail\": \"internal server error\"}`\n  JSON response instead of a framework default error page or an unhandled crash.\n  Expected failures (404, 401, 422, 429) are unaffected - they already go through\n  FastAPI's normal `HTTPException`/validation handling.\n\n## Testing\n\n- `tests/test_db.py` covers the connect-args/engine-kwargs logic in isolation.\n- `tests/test_api.py` covers the degraded health response and the generic 500\n  contract end-to-end.\n"
+      },
+      "rationale": "Live generation, attempt 1."
+    }
+  ],
+  "gates": {
+    "replanning_approval": {
+      "status": "approved",
+      "decided_by": "human"
+    },
+    "merge_release_approval": {
+      "status": "approved",
+      "decided_by": "human"
+    }
+  },
+  "gate_log": [
+    {
+      "gate_type": "replanning_approval",
+      "payload": {
+        "gate_type": "replanning_approval",
+        "reason": "Existing rate-limiting middleware found at 'app/rate_limit.py'; the planned interpretation of this requirement risks duplicating it rather than reusing it.",
+        "initial_tasks": [
+          {
+            "id": "T1",
+            "description": "Implement: No impacted files were identified by the Codebase Reasoner for 'Make the service more reliable.'; treating as a net-new addition.",
+            "depends_on": [],
+            "status": "pending"
+          },
+          {
+            "id": "T2",
+            "description": "Write/update unit tests for the change",
+            "depends_on": [
+              "T1"
+            ],
+            "status": "pending"
+          },
+          {
+            "id": "T3",
+            "description": "Update target-app documentation for the change",
+            "depends_on": [
+              "T1"
+            ],
+            "status": "pending"
+          },
+          {
+            "id": "T4",
+            "description": "Run guardrail checks and prepare for release",
+            "depends_on": [
+              "T2",
+              "T3"
+            ],
+            "status": "pending"
+          }
+        ]
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    },
+    {
+      "gate_type": "merge_release_approval",
+      "payload": {
+        "gate_type": "merge_release_approval",
+        "violations": [],
+        "requirement": "Make the service more reliable.",
+        "files_changed": [
+          "app/db.py",
+          "app/main.py",
+          "docs/CHANGE_da8d6fb7.md",
+          "docs/RELIABILITY.md",
+          "tests/test_api.py",
+          "tests/test_db.py"
+        ]
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    }
+  ],
+  "final_run_status": "completed"
+}
