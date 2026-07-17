@@ -26,7 +26,32 @@ class FixtureNotFoundError(RuntimeError):
     """Raised in replay mode when no recorded fixture matches the current run."""
 
 
-def _build_prompt(state: GraphState) -> str:
+def _available_dependencies_note(workspace: Path) -> str | None:
+    """Ground the prompt in what's actually installed, so Coder doesn't reach for a
+
+    third-party library that isn't in requirements.txt - there is no dynamic
+    dependency-installation step in this architecture, so an unlisted import is a
+    guaranteed test failure regardless of how correct the rest of the code is.
+    """
+    requirements_path = workspace / "requirements.txt"
+    if not requirements_path.is_file():
+        return None
+    packages = [
+        line.strip()
+        for line in requirements_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not packages:
+        return None
+    return (
+        "Only these third-party packages are installed (plus the Python standard "
+        "library) - do not import anything outside this list: " + ", ".join(packages)
+    )
+
+
+def _build_prompt(state: GraphState, workspace: Path) -> str:
+    dependency_note = _available_dependencies_note(workspace)
+
     if state.fallback_triggered:
         lines = [
             "You are generating production-quality Python/FastAPI code for a URL "
@@ -46,6 +71,8 @@ def _build_prompt(state: GraphState) -> str:
         if state.test.failures:
             lines.append("The previous attempt failed these tests - fix the root cause:")
             lines.extend(f"- {failure}" for failure in state.test.failures)
+    if dependency_note:
+        lines.append(dependency_note)
     lines.append(
         "Return ONLY a JSON object mapping relative file paths to full file contents, "
         "no prose, no markdown fences, no explanation outside the JSON."
@@ -53,7 +80,11 @@ def _build_prompt(state: GraphState) -> str:
     return "\n".join(lines)
 
 
-def _invoke_claude_cli(prompt: str) -> dict[str, str]:
+_CLI_CALL_ATTEMPTS = 2
+_CLI_RETRY_DELAY_SECONDS = 2.0
+
+
+def _invoke_claude_cli_once(prompt: str) -> dict[str, str]:
     proc = subprocess.run(
         ["claude", "-p", prompt, "--model", CLAUDE_MODEL, "--output-format", "json"],
         capture_output=True,
@@ -71,6 +102,27 @@ def _invoke_claude_cli(prompt: str) -> dict[str, str]:
     ):
         raise ValueError("claude CLI result did not decode to a flat {path: content} object")
     return code_files
+
+
+def _invoke_claude_cli(prompt: str) -> dict[str, str]:
+    """Wraps the raw CLI call with a small bounded retry.
+
+    Observed during development: the `claude` CLI occasionally returns an empty or
+    malformed stdout on an otherwise healthy call (a transient hiccup, not a code
+    generation problem) - distinct from the outer retry_count mechanism, which
+    retries when the *generated code* fails tests. This retries the call itself
+    before that outer mechanism ever sees a failure.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, _CLI_CALL_ATTEMPTS + 1):
+        try:
+            return _invoke_claude_cli_once(prompt)
+        except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt < _CLI_CALL_ATTEMPTS:
+                time.sleep(_CLI_RETRY_DELAY_SECONDS)
+    assert last_error is not None
+    raise last_error
 
 
 def _load_fixture(fixtures_dir: Path, scenario_type: str) -> dict:
@@ -121,7 +173,7 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
 
     try:
         if state.mode == "live":
-            code_files = _invoke_claude_cli(_build_prompt(state))
+            code_files = _invoke_claude_cli(_build_prompt(state, workspace))
             fixture_source = None
             rationale = f"Live generation, attempt {attempt_number}."
         else:
