@@ -16,6 +16,9 @@ docker-compose.override.yml
 # fixtures under orchestrator/fixtures/ are the committed artifact, not this
 .fixture_capture_workspace/
 
+# Scratch workspace + telemetry logs used by orchestrator/scenarios/run_*.py demos
+.scenario_runs/
+
 # Editor/OS
 .vscode/
 .idea/
