@@ -32,6 +32,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # Python, not curl - the python:3.12-slim base image doesn't have curl
+      # installed, and adding it just for a healthcheck isn't worth the image-size
+      # cost when the interpreter that's already running the app can do the same
+      # check.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   orchestrator:
     build:
@@ -52,7 +62,7 @@ services:
       postgres:
         condition: service_healthy
       target_app:
-        condition: service_started
+        condition: service_healthy
     restart: "no"
 
 volumes:
