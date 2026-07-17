@@ -53,11 +53,20 @@ def _prompt_live_decision(gate_type: str, payload: dict) -> dict:
         print("Please answer y or n.")
 
 
-def run_scenario(scenario_type: str, live: bool = False) -> None:
+def run_scenario(scenario_type: str, live: bool = False, workspace: Path | None = None) -> None:
+    """Run one scenario. If `workspace` is given, operate on it directly (no
+
+    seeding/copying) - used by run_all_scenarios.py's Docker Compose entrypoint,
+    which points all three scenarios at the same shared volume the target_app
+    container serves, so each demo's changes are visible in the live service.
+    Standalone entry points (run_greenfield.py etc.) leave this unset and get an
+    isolated, reproducible scratch copy via seed_workspace() instead.
+    """
     mode = "live" if live else "replay"
     print(f"=== Running '{scenario_type}' scenario in {mode} mode ===")
 
-    workspace = seed_workspace(scenario_type, _RUN_WORKSPACE_ROOT)
+    if workspace is None:
+        workspace = seed_workspace(scenario_type, _RUN_WORKSPACE_ROOT)
     print(f"Workspace: {workspace}")
 
     run_id = f"{scenario_type}-{int(time.time())}"

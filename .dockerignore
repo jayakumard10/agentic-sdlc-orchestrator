@@ -1,0 +1,12 @@
+.git/
+.venv/
+.venv312/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.fixture_capture_workspace/
+.scenario_runs/
+*.db
+docker-compose.override.yml

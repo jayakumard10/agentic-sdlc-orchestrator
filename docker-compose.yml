@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  target_app:
+    build:
+      context: ./target_app
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      API_KEY: ${API_KEY:-change-me-in-production}
+    ports:
+      - "8000:8000"
+    volumes:
+      - target_app_shared:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
+      API_KEY: ${API_KEY:-change-me-in-production}
+      ORCHESTRATOR_MODE: ${ORCHESTRATOR_MODE:-replay}
+      TARGET_APP_WORKSPACE: /shared/target_app
+    volumes:
+      - target_app_shared:/shared/target_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      target_app:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  postgres_data:
+  # Seeded from the target_app image's own baked-in /app content the first time
+  # any service mounts it (standard Docker behavior for a volume mounted over a
+  # non-empty image directory) - never a bind mount to the host's tracked source,
+  # so a demo run can never mutate the actual git-tracked target_app/ files.
+  target_app_shared:

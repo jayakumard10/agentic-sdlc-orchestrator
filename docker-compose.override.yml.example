@@ -1,0 +1,17 @@
+# Copy this file to docker-compose.override.yml (gitignored, never committed) to
+# enable --live mode inside Docker Compose: bind-mounts the HOST's Claude Code OAuth
+# session into the orchestrator container so the real `claude` CLI can authenticate.
+#
+# This only works on a machine that already has an authenticated `claude` CLI
+# (i.e., practically, only the candidate's own machine) - a reviewer's machine
+# won't have this file and doesn't need it; the default docker-compose.yml replays
+# committed fixtures deterministically with no login required.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   ORCHESTRATOR_MODE=live docker compose up orchestrator
+
+services:
+  orchestrator:
+    volumes:
+      - ${HOME}/.claude:/root/.claude:ro
+      - ${HOME}/.claude.json:/root/.claude.json:ro
