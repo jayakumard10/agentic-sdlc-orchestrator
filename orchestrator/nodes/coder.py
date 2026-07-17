@@ -90,9 +90,30 @@ _CLI_CALL_ATTEMPTS = 2
 _CLI_RETRY_DELAY_SECONDS = 2.0
 
 
-def _invoke_claude_cli_once(prompt: str) -> dict[str, str]:
+def _extract_json_object(text: str) -> dict:
+    """Parse `text` as JSON, falling back to extracting the outermost {...} substring.
+
+    `claude -p` runs the full agentic CLI (with file-system tool access), not a bare
+    completion - on a heavier generation it can preface its final answer with a short
+    narration ("All content verified. Here is the final JSON output.") despite explicit
+    "no prose" instructions. Rather than relying on prompt wording alone to prevent
+    this, parse defensively: strict JSON first, then the largest brace-delimited
+    substring if that fails.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        return json.loads(text[start : end + 1])
+
+
+def _invoke_claude_cli_once(prompt: str, workspace: Path) -> dict[str, str]:
     proc = subprocess.run(
         ["claude", "-p", prompt, "--model", CLAUDE_MODEL, "--output-format", "json"],
+        cwd=workspace,
         capture_output=True,
         text=True,
         timeout=CLAUDE_CLI_TIMEOUT_SECONDS,
@@ -102,7 +123,7 @@ def _invoke_claude_cli_once(prompt: str) -> dict[str, str]:
     payload = json.loads(proc.stdout)
     if payload.get("is_error") or payload.get("subtype") != "success":
         raise RuntimeError(f"claude CLI reported an error: {payload}")
-    code_files = json.loads(payload["result"])
+    code_files = _extract_json_object(payload["result"])
     if not isinstance(code_files, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in code_files.items()
     ):
@@ -110,7 +131,7 @@ def _invoke_claude_cli_once(prompt: str) -> dict[str, str]:
     return code_files
 
 
-def _invoke_claude_cli(prompt: str) -> dict[str, str]:
+def _invoke_claude_cli(prompt: str, workspace: Path) -> dict[str, str]:
     """Wraps the raw CLI call with a small bounded retry.
 
     Observed during development: the `claude` CLI occasionally returns an empty or
@@ -118,11 +139,18 @@ def _invoke_claude_cli(prompt: str) -> dict[str, str]:
     generation problem) - distinct from the outer retry_count mechanism, which
     retries when the *generated code* fails tests. This retries the call itself
     before that outer mechanism ever sees a failure.
+
+    `workspace` is passed as the subprocess cwd: `claude -p` runs the full agentic
+    CLI with file-system tool access, not a bare completion, so without this it
+    orients itself on whatever directory the *orchestrator* happens to be running
+    in (the whole monorepo) instead of the actual target-app workspace it's meant
+    to generate code for - observed taking 46 tool-use turns and 455 seconds
+    exploring the wrong tree before this fix.
     """
     last_error: Exception | None = None
     for attempt in range(1, _CLI_CALL_ATTEMPTS + 1):
         try:
-            return _invoke_claude_cli_once(prompt)
+            return _invoke_claude_cli_once(prompt, workspace)
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
             last_error = exc
             if attempt < _CLI_CALL_ATTEMPTS:
@@ -179,7 +207,7 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
 
     try:
         if state.mode == "live":
-            code_files = _invoke_claude_cli(_build_prompt(state, workspace))
+            code_files = _invoke_claude_cli(_build_prompt(state, workspace), workspace)
             fixture_source = None
             rationale = f"Live generation, attempt {attempt_number}."
         else:
