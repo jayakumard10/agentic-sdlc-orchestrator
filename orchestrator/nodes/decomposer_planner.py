@@ -6,6 +6,12 @@ Coder -> (Test Executor, Documentation) -> Release Gate topology, giving an
 explicit, inspectable decomposition artifact rather than leaving it implicit in the
 fixed graph structure. Gates on plan_approval only for greenfield, per the
 gate-placement distribution.
+
+This node also produces the ambiguous scenario's *revised* plan: when it runs after
+the Re-planner's replanning_approval gate has already been approved, it inserts a
+reconciliation task ahead of the implementation task instead of just re-emitting the
+original list - this is what makes "dynamic re-planning when upstream outputs
+change" a real, inspectable difference in state rather than a relabeled no-op.
 """
 
 from __future__ import annotations
@@ -22,26 +28,50 @@ def decomposer_planner(state: GraphState) -> dict:
 
     change_summary = state.architecture_design.summary or state.requirement_clarified
 
-    tasks = [
-        Task(id="T1", description=f"Implement: {change_summary}", depends_on=[]),
-        Task(id="T2", description="Write/update unit tests for the change", depends_on=["T1"]),
-        Task(
-            id="T3",
-            description="Update target-app documentation for the change",
-            depends_on=["T1"],
-        ),
-        Task(
-            id="T4",
-            description="Run guardrail checks and prepare for release",
-            depends_on=["T2", "T3"],
-        ),
-    ]
+    replanning_gate = state.gates.get("replanning_approval")
+    is_revision = replanning_gate is not None and replanning_gate.status == "approved"
+
+    if is_revision:
+        tasks = [
+            Task(
+                id="T0",
+                description=f"Reconcile with existing functionality: {state.replanning_reason}",
+                depends_on=[],
+            ),
+            Task(id="T1", description=f"Implement (revised): {change_summary}", depends_on=["T0"]),
+            Task(id="T2", description="Write/update unit tests for the change", depends_on=["T1"]),
+            Task(
+                id="T3",
+                description="Update target-app documentation for the change",
+                depends_on=["T1"],
+            ),
+            Task(
+                id="T4",
+                description="Run guardrail checks and prepare for release",
+                depends_on=["T2", "T3"],
+            ),
+        ]
+    else:
+        tasks = [
+            Task(id="T1", description=f"Implement: {change_summary}", depends_on=[]),
+            Task(id="T2", description="Write/update unit tests for the change", depends_on=["T1"]),
+            Task(
+                id="T3",
+                description="Update target-app documentation for the change",
+                depends_on=["T1"],
+            ),
+            Task(
+                id="T4",
+                description="Run guardrail checks and prepare for release",
+                depends_on=["T2", "T3"],
+            ),
+        ]
 
     events = [
         AuditEvent(
             node="decomposer_planner",
             event_type="node_start",
-            detail=f"decomposed into {len(tasks)} tasks",
+            detail=f"decomposed into {len(tasks)} tasks{' (revised plan)' if is_revision else ''}",
         )
     ]
 

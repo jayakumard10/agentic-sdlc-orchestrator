@@ -7,6 +7,14 @@ on greenfield via an explicit conditional edge in graph.py (no existing code to
 reason about), so in practice this node only ever runs for brownfield and ambiguous.
 The codebase-impact-review gate only fires for brownfield, per the gate-placement
 distribution; ambiguous still gets the analysis, just without pausing on it.
+
+For the ambiguous scenario specifically, this node also runs a second, deterministic
+check: does the workspace already contain rate-limiting middleware? A vague
+"make it more reliable" requirement plausibly gets planned as "add rate limiting",
+which would collide with functionality that already exists - a concrete, scripted
+conflict (not something an LLM has to notice) that triggers the Re-planner node.
+Scripted deliberately, per the confirmed design, so replay stays reproducible rather
+than depending on an LLM rediscovering the same conflict every run.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ _STOPWORDS = {
     "that", "this", "with", "make", "add", "fix", "it", "be", "more",
 }
 _ROUTE_PATTERN = re.compile(r"@\w+\.(get|post|put|delete|patch)\(")
+_REPLANNING_CONFLICT_MARKER = "rate_limit"
 
 
 def _extract_keywords(text: str) -> list[str]:
@@ -63,6 +72,20 @@ def _scan_workspace(workspace: Path, keywords: list[str]) -> tuple[list[str], li
         else:
             impacted_modules.append(relative)
     return impacted_modules, impacted_apis
+
+
+def _detect_replanning_conflict(workspace: Path) -> str | None:
+    if not workspace.is_dir():
+        return None
+    for path in sorted(workspace.rglob("*.py")):
+        if _REPLANNING_CONFLICT_MARKER in path.stem.lower():
+            relative = path.relative_to(workspace).as_posix()
+            return (
+                f"Existing rate-limiting middleware found at '{relative}'; the "
+                "planned interpretation of this requirement risks duplicating it "
+                "rather than reusing it."
+            )
+    return None
 
 
 def codebase_reasoner(state: GraphState, workspace: Path) -> dict:
@@ -113,13 +136,24 @@ def codebase_reasoner(state: GraphState, workspace: Path) -> dict:
             )
         )
 
+    updates: dict = {"codebase_impact": impact, "gates": gates}
+
+    final_detail = "impact analysis complete"
+    if state.scenario_type == "ambiguous":
+        replanning_reason = _detect_replanning_conflict(workspace)
+        if replanning_reason:
+            updates["replanning_triggered"] = True
+            updates["replanning_reason"] = replanning_reason
+            final_detail = f"impact analysis complete; re-planning conflict detected: {replanning_reason}"
+
     events.append(
         AuditEvent(
             node="codebase_reasoner",
             event_type="node_end",
-            detail="impact analysis complete",
+            detail=final_detail,
             latency_ms=(time.monotonic() - start) * 1000,
         )
     )
+    updates["events"] = events
 
-    return {"codebase_impact": impact, "gates": gates, "events": events}
+    return updates
