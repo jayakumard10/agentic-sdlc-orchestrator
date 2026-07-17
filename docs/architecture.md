@@ -94,7 +94,7 @@ validated directly (`orchestrator/tests/test_nodes_*.py`) by resuming the same
 interrupt with both a synthetic "human" decision and a fixture-recorded one and
 confirming identical downstream behavior.
 
-**Gate placement is distributed across the three scenarios**, not all six gate
+**Gate placement is distributed across the three scenarios**, not all five gate
 types demoed in one run:
 
 | Gate | Fires on | Rationale |

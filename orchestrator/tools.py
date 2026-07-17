@@ -163,13 +163,29 @@ class GitOperationError(RuntimeError):
     """Raised when a git subprocess call against the target-app workspace fails."""
 
 
+# Bound every git call the same way run_pytest_sandboxed bounds pytest: the
+# rollback/safe-stop machinery runs entirely through _run_git, and git can hang
+# (index lock, an unexpected credential prompt, a slow filesystem). A hung git
+# call would otherwise stall the whole orchestrator with no timeout to break it.
+_GIT_TIMEOUT_SECONDS = 30
+
+
 def _run_git(workspace: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.error(
+            "git %s timed out in %s after %ss", " ".join(args), workspace, _GIT_TIMEOUT_SECONDS
+        )
+        raise GitOperationError(
+            f"git {' '.join(args)} timed out in {workspace} after {_GIT_TIMEOUT_SECONDS}s"
+        ) from exc
     if proc.returncode != 0:
         logger.error("git %s failed in %s: %s", " ".join(args), workspace, proc.stderr.strip())
         raise GitOperationError(f"git {' '.join(args)} failed in {workspace}: {proc.stderr.strip()}")

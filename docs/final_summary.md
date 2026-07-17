@@ -96,8 +96,8 @@ identical either way, not a simulated bypass.
   `orchestrator/tests/test_graph_integration.py` (`test_fallback_exhaustion_rolls_back`,
   both rollback tests, and `test_safe_stop_on_missing_fixture_never_reaches_release_gate`)
   through synthetic fixtures, which keeps each of the three named demos focused on
-  the one gate/path it's meant to showcase rather than needing to contrive all six
-  governance paths into three runs.
+  the one gate/path it's meant to showcase rather than needing to contrive every
+  governance path into three runs.
 - **The demo scripts and fixture-capture tool are deliberately excluded from the
   orchestrator's own coverage report.** They're thin I/O wrappers around
   already-100%-covered graph logic; validated by actually running them rather than
@@ -110,6 +110,14 @@ identical either way, not a simulated bypass.
   `app/auth.py` as impacted during development) — bounded by capping how many
   files get spelled out in the downstream prompt rather than by chasing perfect
   precision.
+- **The DDL-change guardrail scans for literal SQL DDL, not ORM schema edits.**
+  `tools.evaluate_guardrails` flags `CREATE`/`ALTER`/`DROP TABLE`-style statements
+  in generated code, but this app expresses schema changes as SQLAlchemy model
+  edits (adding a `Column` to a model class), which contain no DDL keywords. ORM
+  schema changes are therefore caught by the human release gate and code review
+  rather than by this regex — the guardrail is a cheap backstop for hand-written
+  SQL, not the primary control for ORM-driven schema evolution. A production
+  version would diff model metadata (or hook Alembic autogenerate) to close the gap.
 - **The rate limiter is in-process, not distributed.** No Redis, no shared state
   across instances — appropriate for a single-container demo with no
   multi-instance concurrency to coordinate across, explicitly not appropriate for

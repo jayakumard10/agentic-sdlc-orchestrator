@@ -7,6 +7,7 @@ during integration testing).
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,17 @@ def test_git_operation_error_raised_on_invalid_revert_target(tmp_path: Path):
     tools.git_commit_all(tmp_path, "initial")
     with pytest.raises(tools.GitOperationError):
         tools.git_revert_to(tmp_path, "0000000000000000000000000000000000dead")
+
+
+def test_git_operation_error_raised_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def _raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=tools._GIT_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+    with pytest.raises(tools.GitOperationError, match="timed out"):
+        tools.git_revert_to(tmp_path, "deadbeef")
 
 
 def test_git_operation_error_logs_before_raising(
