@@ -9,6 +9,7 @@ flow a URL shortener exists for, and it must not require a key.
 
 from __future__ import annotations
 
+import hmac
 import os
 
 from fastapi import Header, HTTPException
@@ -21,5 +22,8 @@ def _configured_api_key() -> str:
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    if x_api_key is None or x_api_key != _configured_api_key():
+    # hmac.compare_digest, not `!=` - a plain string comparison short-circuits on
+    # the first mismatched byte, which leaks the key's correct prefix length
+    # through response-timing differences. compare_digest runs in constant time.
+    if x_api_key is None or not hmac.compare_digest(x_api_key, _configured_api_key()):
         raise HTTPException(status_code=401, detail="invalid or missing API key")
