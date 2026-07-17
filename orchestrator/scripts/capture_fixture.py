@@ -60,6 +60,16 @@ SCENARIOS: dict[str, dict] = {
             "codebase_impact_review": {"status": "approved", "decided_by": "human"},
             "merge_release_approval": {"status": "approved", "decided_by": "human"},
         },
+        # QA already wrote a regression test proving the bug before the fix request
+        # came in - Coder discovers it the same way a real engineer would: it's
+        # already failing when Test Executor runs, and the failure feeds back into
+        # the retry prompt. Requires PostgreSQL reachable (see the seed file's own
+        # skip guard) since the race doesn't reproduce against SQLite's write model.
+        "seed_files": {
+            "tests/test_concurrency.py": (
+                _ORCHESTRATOR_ROOT / "scripts" / "scenario_seeds" / "brownfield_test_concurrency.py"
+            ),
+        },
     },
     "ambiguous": {
         "requirement_raw": "Make the service more reliable.",
@@ -98,6 +108,13 @@ def _seed_workspace(scenario_type: str) -> Path:
 def capture(scenario_type: str) -> None:
     scenario = SCENARIOS[scenario_type]
     workspace = _seed_workspace(scenario_type)
+
+    for relative_dest, source_path in scenario.get("seed_files", {}).items():
+        dest = workspace / relative_dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(Path(source_path).read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"  [seed] {relative_dest} <- {source_path}")
+
     compiled = build_graph(workspace, _FIXTURES_DIR, build_memory_checkpointer())
     config = {"configurable": {"thread_id": f"capture-{scenario_type}"}}
 

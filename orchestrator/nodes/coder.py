@@ -19,7 +19,9 @@ import tools
 from state import AuditEvent, CoderOutput, GraphState
 
 CLAUDE_MODEL = "claude-sonnet-5"
-CLAUDE_CLI_TIMEOUT_SECONDS = 300
+# 300s was too tight for a retry prompt covering several files - observed a genuine
+# timeout (not a hang) during brownfield fixture capture.
+CLAUDE_CLI_TIMEOUT_SECONDS = 480
 
 
 class FixtureNotFoundError(RuntimeError):

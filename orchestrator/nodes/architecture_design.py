@@ -14,6 +14,20 @@ import time
 
 from state import ArchitectureDesign, AuditEvent, GraphState
 
+# Codebase Reasoner's keyword scan is deliberately simple and can over-match (common
+# words coincidentally appearing in docstrings/comments across many files) - capping
+# how many file names get spelled out keeps the downstream Coder prompt bounded
+# regardless of how imprecise any single match happens to be.
+_MAX_FILES_LISTED = 5
+
+
+def _format_file_list(paths: list[str]) -> str:
+    shown = paths[:_MAX_FILES_LISTED]
+    text = ", ".join(shown)
+    if len(paths) > _MAX_FILES_LISTED:
+        text += f", and {len(paths) - _MAX_FILES_LISTED} more"
+    return text
+
 
 def architecture_design(state: GraphState) -> dict:
     start = time.monotonic()
@@ -28,12 +42,13 @@ def architecture_design(state: GraphState) -> dict:
     elif state.codebase_impact.impacted_apis or state.codebase_impact.impacted_modules:
         touched = state.codebase_impact.impacted_modules + state.codebase_impact.impacted_apis
         summary = (
-            f"Change scoped to existing file(s): {', '.join(touched)}. Modify in place to "
-            f"satisfy '{state.requirement_clarified}' without changing public API signatures "
-            "unless the impacted file is itself an API module."
+            f"Change scoped to existing file(s): {_format_file_list(touched)}. Modify in "
+            f"place to satisfy '{state.requirement_clarified}' without changing public API "
+            "signatures unless the impacted file is itself an API module."
         )
         api_schema_changes = [
-            f"Review signature stability of: {api}" for api in state.codebase_impact.impacted_apis
+            f"Review signature stability of: {api}"
+            for api in state.codebase_impact.impacted_apis[:_MAX_FILES_LISTED]
         ]
     else:
         summary = (
