@@ -1,4 +1,4 @@
-.PHONY: up down build logs test test-orchestrator test-target-app coverage clean
+.PHONY: up down build logs test test-orchestrator test-target-app coverage clean demo-shorten-url
 
 up: ## Start the full stack (postgres, target_app, orchestrator runs all 3 demos, exits)
 	docker compose up --build
@@ -20,6 +20,9 @@ demo-brownfield: ## Run only the brownfield scenario
 
 demo-ambiguous: ## Run only the ambiguous scenario
 	docker compose run --rm orchestrator python scenarios/run_ambiguous.py
+
+demo-shorten-url: ## Shorten a real URL against the running target_app (requires postgres+target_app up)
+	bash scripts/demo_shorten_url.sh
 
 test: test-orchestrator test-target-app ## Run both test suites
 
@@ -44,6 +47,7 @@ help: ## Show this help
 	@echo demo-greenfield       Run only the greenfield scenario
 	@echo demo-brownfield       Run only the brownfield scenario
 	@echo demo-ambiguous        Run only the ambiguous scenario
+	@echo demo-shorten-url      Shorten a real URL and show the redirect + analytics
 	@echo test                Run both test suites
 	@echo test-orchestrator     Run the orchestrator's own test suite
 	@echo test-target-app       Run the target app's test suite

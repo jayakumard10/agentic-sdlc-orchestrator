@@ -62,12 +62,18 @@ machine:
    captures directly to GIF with no post-processing step) — or if you're on
    Mac/Linux, `Cmd+Shift+5` (macOS built-in) or [Peek](https://github.com/phw/peek)
    (Linux) work just as well.
-2. Run `docker compose up --build` (or `make up`, if you have `make` installed)
-   in a terminal sized to something reasonable (~100×30).
-3. Start recording, let it run to `=== All scenarios complete ===` (about 15–20s),
-   stop, export as GIF.
+2. Bring up the stack first (`docker compose up -d postgres target_app`, or the
+   full `docker compose up --build` if you also want the orchestration logs
+   available), in a terminal sized to something reasonable (~100×30).
+3. Start recording, then run [`.\scripts\demo_shorten_url.ps1`](scripts/demo_shorten_url.ps1)
+   (a real long URL shortened, redirected, and its click count read back — more
+   immediately understandable to a general audience than the orchestration logs).
+   Stop recording a couple seconds after the analytics line prints.
 4. Drop the file at `docs/demo.gif` and replace the placeholder line above with
    `![Demo](docs/demo.gif)`.
+
+For the orchestration-focused recording instead (or in addition), swap step 3 for
+`docker compose up --build` and stop at `=== All scenarios complete ===` (~15–20s).
 
 ## Quickstart (30 seconds, nothing to configure)
 
@@ -105,6 +111,51 @@ curl http://localhost:8000/health
 If `make` is installed, `make help` lists every shortcut (individual scenarios,
 test suites, coverage regeneration, teardown) — see the [Makefile](Makefile) for
 the equivalent raw commands either way.
+
+## Try the actual product: shorten a real URL
+
+Beyond the orchestration demos, `target_app` is a real, running URL shortener.
+This shortens an actual URL, then follows the redirect and reads back the click
+analytics — one command, real output:
+
+```powershell
+# PowerShell
+.\scripts\demo_shorten_url.ps1
+```
+
+```bash
+# bash / Git Bash / macOS / Linux
+./scripts/demo_shorten_url.sh
+# or: make demo-shorten-url
+```
+
+```
+==================================================================
+ URL Shortener - live demo against http://localhost:8000
+==================================================================
+
+Original URL:
+  https://www.schwab.com/invest-with-us
+
+Shortened URL:
+  http://localhost:8000/ZbBFho3
+
+==================================================================
+ Following the redirect
+==================================================================
+
+  location: https://www.schwab.com/invest-with-us
+
+==================================================================
+ Analytics (click count after one redirect)
+==================================================================
+
+{"code":"ZbBFho3","long_url":"https://www.schwab.com/invest-with-us","click_count":1,...}
+```
+
+Pass any URL as an argument (`./scripts/demo_shorten_url.sh https://example.com`) —
+`postgres` + `target_app` need to already be running (`docker compose up` or
+`docker compose up -d postgres target_app`).
 
 ## Running one scenario at a time
 
@@ -186,6 +237,7 @@ docs/
   final_summary.md        Plan/rationale, artifacts, risks, assumptions, limitations
   scenarios/               Per-scenario walkthroughs with real captured output
   coverage/                 pytest-cov reports + functional coverage tables
+scripts/                 Product demo scripts (e.g. shorten a real URL against the running app)
 docker-compose.yml       The full stack
 Makefile                 One-command shortcuts (make help for the full list)
 ```
