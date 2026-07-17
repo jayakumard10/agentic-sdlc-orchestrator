@@ -72,9 +72,21 @@ SCENARIOS: dict[str, dict] = {
 
 
 def _seed_workspace(scenario_type: str) -> Path:
-    workspace = _CAPTURE_WORKSPACE_ROOT / scenario_type
-    if workspace.exists():
-        shutil.rmtree(workspace, ignore_errors=True)
+    """Always create a fresh, uniquely-named workspace rather than deleting and
+
+    reusing the same path. Deleting a just-used directory on Windows is unreliable
+    (git object files land read-only, and a directory recently used as a shell's cwd
+    or scanned by antivirus can stay locked for a moment after the process using it
+    exits) - sidestepping the delete entirely is simpler and more robust than
+    fighting that race. orchestrator/fixtures/<scenario>/transcript.json is the
+    committed artifact; these scratch workspaces are gitignored and disposable.
+    """
+    base = _CAPTURE_WORKSPACE_ROOT / scenario_type
+    workspace = base
+    suffix = 0
+    while workspace.exists():
+        suffix += 1
+        workspace = _CAPTURE_WORKSPACE_ROOT / f"{scenario_type}_{suffix}"
     shutil.copytree(
         _REPO_ROOT / "target_app",
         workspace,
@@ -113,6 +125,11 @@ def capture(scenario_type: str) -> None:
         raise RuntimeError(
             f"scenario '{scenario_type}' still paused after {steps} resumes - "
             "a gate type is missing from SCENARIOS[...]['decisions']"
+        )
+
+    if result.get("safe_stop"):
+        raise RuntimeError(
+            f"scenario '{scenario_type}' safe-stopped: {result['coder'].rationale}"
         )
 
     attempts = [

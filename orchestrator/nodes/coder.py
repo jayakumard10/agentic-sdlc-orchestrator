@@ -74,6 +74,10 @@ def _build_prompt(state: GraphState, workspace: Path) -> str:
     if dependency_note:
         lines.append(dependency_note)
     lines.append(
+        "Include pytest test file(s) under tests/ covering the new/changed behavior, "
+        "not just the implementation."
+    )
+    lines.append(
         "Return ONLY a JSON object mapping relative file paths to full file contents, "
         "no prose, no markdown fences, no explanation outside the JSON."
     )
