@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app import rate_limit
+from app.auth import require_api_key
 from app.db import get_session, init_db
 from app.repository import SQLAlchemyURLRepository, URLRepository
 from app.schemas import ShortenRequest, ShortenResponse, StatsResponse
@@ -47,7 +48,12 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/shorten", response_model=ShortenResponse, status_code=201)
+@app.post(
+    "/shorten",
+    response_model=ShortenResponse,
+    status_code=201,
+    dependencies=[Depends(require_api_key)],
+)
 def shorten(
     payload: ShortenRequest,
     request: Request,
@@ -63,7 +69,11 @@ def shorten(
     return ShortenResponse(code=code, short_url=f"/{code}", long_url=long_url)
 
 
-@app.get("/{code}/stats", response_model=StatsResponse)
+@app.get(
+    "/{code}/stats",
+    response_model=StatsResponse,
+    dependencies=[Depends(require_api_key)],
+)
 def stats(code: str, repo: URLRepository = Depends(get_repository)) -> StatsResponse:
     record = repo.get_by_code(code)
     if record is None:

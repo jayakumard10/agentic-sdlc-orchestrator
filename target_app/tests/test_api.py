@@ -50,3 +50,33 @@ def test_shorten_rate_limit_enforced(client):
         assert response.status_code == 201
     limited_response = client.post("/shorten", json={"long_url": "https://example.com/x"})
     assert limited_response.status_code == 429
+
+
+def test_shorten_requires_api_key(client):
+    client.headers.pop("X-API-Key", None)
+    response = client.post("/shorten", json={"long_url": "https://example.com/x"})
+    assert response.status_code == 401
+
+
+def test_shorten_rejects_wrong_api_key(client):
+    client.headers.update({"X-API-Key": "not-the-right-key"})
+    response = client.post("/shorten", json={"long_url": "https://example.com/x"})
+    assert response.status_code == 401
+
+
+def test_stats_requires_api_key(client):
+    shorten_response = client.post("/shorten", json={"long_url": "https://example.com/x"})
+    code = shorten_response.json()["code"]
+
+    client.headers.pop("X-API-Key", None)
+    response = client.get(f"/{code}/stats")
+    assert response.status_code == 401
+
+
+def test_redirect_does_not_require_api_key(client):
+    shorten_response = client.post("/shorten", json={"long_url": "https://example.com/x"})
+    code = shorten_response.json()["code"]
+
+    client.headers.pop("X-API-Key", None)
+    response = client.get(f"/{code}", follow_redirects=False)
+    assert response.status_code == 307

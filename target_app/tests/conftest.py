@@ -15,6 +15,8 @@ from app import rate_limit
 from app.db import Base, get_session
 from app.main import app
 
+TEST_API_KEY = "test-api-key"
+
 
 @pytest.fixture()
 def test_engine():
@@ -39,9 +41,11 @@ def client(test_engine, monkeypatch):
         finally:
             session.close()
 
+    monkeypatch.setenv("API_KEY", TEST_API_KEY)
     monkeypatch.setattr("app.main.init_db", lambda: None)
     app.dependency_overrides[get_session] = override_get_session
     rate_limit.reset()
     with TestClient(app) as test_client:
+        test_client.headers.update({"X-API-Key": TEST_API_KEY})
         yield test_client
     app.dependency_overrides.clear()
