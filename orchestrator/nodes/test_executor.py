@@ -3,9 +3,13 @@
 Owns the retry -> fallback state-transition bookkeeping (governance model, §6 of the
 plan): on failure, increments retry_count while under the bounded limit; once the
 limit is reached, flips fallback_triggered so the next Coder invocation uses a
-reduced-scope prompt; if the fallback attempt also fails, counters are left as-is so
-graph.py's routing (Phase 3) can recognize "fallback already tried and failed" and
-route to rollback instead of retrying forever.
+reduced-scope prompt; if the fallback attempt also fails, counters are left as-is.
+
+Also sets route_hint explicitly for graph.py's routing (Phase 3): "fallback_triggered
+is True and the test failed" is ambiguous on its own between "about to try the
+fallback attempt" and "the fallback attempt just failed too" - this node has the
+full before/after context to disambiguate at the moment it happens, so the router
+downstream never has to guess from raw counters.
 """
 
 from __future__ import annotations
@@ -51,15 +55,19 @@ def test_executor(state: GraphState, workspace: Path) -> dict:
 
     if run.passed:
         summary = "tests passed"
+        updates["route_hint"] = "proceed"
     elif state.fallback_triggered:
         summary = "tests failed (fallback attempt also failed)"
+        updates["route_hint"] = "rollback"
     elif state.retry_count < state.retry_limit:
         updates["retry_count"] = state.retry_count + 1
         summary = f"tests failed, retrying (attempt {state.retry_count + 2} of {state.retry_limit + 1})"
+        updates["route_hint"] = "retry"
         events.append(AuditEvent(node="test_executor", event_type="retry", detail=summary))
     else:
         updates["fallback_triggered"] = True
         summary = "retries exhausted, falling back to reduced-scope prompt"
+        updates["route_hint"] = "fallback_attempt"
         events.append(AuditEvent(node="test_executor", event_type="fallback", detail=summary))
 
     events.append(
