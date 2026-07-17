@@ -1,26 +1,33 @@
 # Agentic SDLC Orchestrator
 
-A working prototype that turns a plain-English requirement into a reviewable
-engineering outcome using an agentic execution model: a real [LangGraph](https://github.com/langchain-ai/langgraph)
-`StateGraph` orchestrates requirement clarification, codebase impact analysis,
-architecture/design, task decomposition, LLM-driven code generation, automated
-testing, documentation, and release — with human-approval gates, bounded retries,
-fallback, rollback, safe-stop, and a full JSON-lines audit trail at every step.
+**A requirement goes in. A reviewed, tested, merged change comes out — with a human
+approving every high-impact step along the way.**
 
-The primary deliverable is **the orchestrator**. The system it builds/evolves — a
-small URL-shortener service — is the demo substrate that proves the orchestrator
-actually works, not the point of the exercise.
+A working prototype built on a real [LangGraph](https://github.com/langchain-ai/langgraph)
+`StateGraph`: 9 orchestration nodes, 5 human-approval gates, bounded retry →
+fallback → rollback → safe-stop governance, genuine parallel execution, dynamic
+re-planning, and a full JSON-lines audit trail — driving a real LLM (`claude`) to
+generate, test, document, and merge changes to a live FastAPI service.
 
-## Quickstart
+The primary deliverable is **the orchestrator itself**. The system it builds/evolves
+— a small URL-shortener service — is the demo substrate that proves it actually
+works, not the point of the exercise.
+
+> **Demo recording:** *(placeholder — drop a short screen recording or GIF of
+> `make up` here, e.g. captured with [ScreenToGif](https://www.screentogif.com/),
+> LICEcap, or Windows' built-in Xbox Game Bar `Win+G`. A 30–60s capture of the
+> terminal output below is all that's needed.)*
+
+## Quickstart (30 seconds, nothing to configure)
 
 ```bash
 git clone <this-repo>
 cd agentic-sdlc-orchestrator
 cp .env.example .env
-docker compose up --build
+make up          # or: docker compose up --build
 ```
 
-That's it. No login, no API key, nothing to configure. This brings up:
+No login, no API key, nothing to configure. This brings up:
 
 - **postgres** — the checkpointer's durability layer and the target app's database
 - **target_app** — the URL shortener, live at `http://localhost:8000`
@@ -40,12 +47,18 @@ After the run, `postgres` and `target_app` keep running:
 curl http://localhost:8000/health
 ```
 
+Run `make help` for every available shortcut (individual scenarios, test suites,
+coverage regeneration, teardown).
+
 ## Running one scenario at a time
 
 ```bash
+make demo-greenfield
+make demo-brownfield
+make demo-ambiguous
+
+# equivalent, without make:
 docker compose run --rm orchestrator python scenarios/run_greenfield.py
-docker compose run --rm orchestrator python scenarios/run_brownfield.py
-docker compose run --rm orchestrator python scenarios/run_ambiguous.py
 ```
 
 Each scenario has a companion write-up with an actual captured run and an
@@ -118,6 +131,7 @@ docs/
   scenarios/               Per-scenario walkthroughs with real captured output
   coverage/                 pytest-cov reports + functional coverage tables
 docker-compose.yml       The full stack
+Makefile                 One-command shortcuts (make help for the full list)
 ```
 
 ## Testing approach
@@ -144,14 +158,23 @@ report with reasoning for every deliberate exclusion, and
 [docs/coverage/functional_coverage.md](docs/coverage/functional_coverage.md) for
 scenario × requirement/API and scenario × SDLC-stage coverage tables.
 
-## Limitations and trade-offs
+## Design trade-offs made under the time constraint
 
-See [docs/final_summary.md](docs/final_summary.md) for the full accounting. Headline
-items: no database migration tooling (Alembic) — `Base.metadata.create_all()` only;
-lightweight API-key auth on the target app rather than full user accounts; the
-three demo scenarios run against independent workspace copies rather than one
-cumulative live-evolving service (a real conflict was found and is documented when
-that was tried); fallback/rollback/safe-stop are real, tested infrastructure but
-not exercised by the three named demos (they're exercised directly by
-`test_graph_integration.py` instead, keeping each demo focused on the specific gate
-it's meant to showcase).
+This was built to a target of 6–8 hours with a hard ceiling of 10. Where a choice
+had to be made between finishing faster and finishing with a more complete
+orchestration/governance design, the more complete design won — the cuts below are
+all in secondary polish, not in orchestration depth, human-approval-gate coverage,
+or test rigor, which is where the actual evaluation weight sits.
+
+| Area | What shipped | What a real production version would add | Why this split |
+|---|---|---|---|
+| Target-app auth | Lightweight shared-secret API key on write/analytics endpoints | Full user accounts, ownership, per-user audit trail | Guards the two concrete abuse vectors in scope without the time cost of a full auth system; reopened and resolved mid-build after direct review pushback — see [docs/final_summary.md](docs/final_summary.md) |
+| Database schema management | `Base.metadata.create_all()` on startup | Alembic migrations | Real practice, not worth the time cost at this scope; documented rather than hidden |
+| Codebase impact analysis | Deterministic keyword scan | Real static analysis / AST-level reasoning | Deliberately lightweight — it answers "what looks relevant"; actual code understanding is the LLM-powered Coder node's job |
+| Rate limiting | In-process, single-container | Redis-backed, multi-instance | No horizontal scaling to coordinate across in a single-container demo |
+| CI/CD pipeline | None | GitHub Actions running both test suites + coverage gates | The test suites *are* the artifact a CI pipeline would run; the pipeline config itself was out of scope for the time budget |
+| Three-scenario demo workspace | Each scenario runs against its own isolated copy | One cumulative, live-evolving shared service | Tried the cumulative version first — it broke on the third scenario because two independently-captured fixtures both touched `app/main.py`. Correctness across all three demos won over the more visually impressive "watch it evolve live" narrative. Full story in [docs/architecture.md](docs/architecture.md). |
+
+Full accounting — including every real bug found and fixed during the build, not
+just the ones I chose to cut — is in
+[docs/final_summary.md](docs/final_summary.md).
