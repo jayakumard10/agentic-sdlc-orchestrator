@@ -1,0 +1,77 @@
+{
+  "scenario_type": "brownfield",
+  "requirement_raw": "The click-analytics counter under-counts on concurrent redirects; make it thread-/process-safe.",
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "code_files": {
+        "app/repository.py": "\"\"\"Repository/DAO layer sitting between the API and the database.\"\"\"\n\nfrom __future__ import annotations\n\nimport threading\nfrom typing import Protocol\n\nfrom sqlalchemy.orm import Session\n\nfrom app.models import ShortURL\n\n\nclass URLRepository(Protocol):\n    def create(self, code: str, long_url: str) -> ShortURL: ...\n\n    def get_by_code(self, code: str) -> ShortURL | None: ...\n\n    def increment_click(self, code: str) -> None: ...\n\n    def code_exists(self, code: str) -> bool: ...\n\n\nclass SQLAlchemyURLRepository:\n    def __init__(self, session: Session) -> None:\n        self._session = session\n\n    def create(self, code: str, long_url: str) -> ShortURL:\n        record = ShortURL(code=code, long_url=long_url, click_count=0)\n        self._session.add(record)\n        self._session.commit()\n        self._session.refresh(record)\n        return record\n\n    def get_by_code(self, code: str) -> ShortURL | None:\n        return self._session.query(ShortURL).filter_by(code=code).first()\n\n    def increment_click(self, code: str) -> None:\n        # Guard the read-modify-write with a lock so concurrent redirects can not\n        # interleave and lose an update.\n        lock = threading.Lock()\n        with lock:\n            record = self._session.query(ShortURL).filter_by(code=code).first()\n            if record is None:\n                return\n            record.click_count = record.click_count + 1\n            self._session.commit()\n\n    def code_exists(self, code: str) -> bool:\n        return self._session.query(ShortURL).filter_by(code=code).first() is not None\n"
+      },
+      "rationale": "First attempt: guarded increment_click with a threading.Lock() around the existing read-modify-write. This looks like a fix and would even pass a naive single-threaded review, but the lock is instantiated fresh inside the method on every call - each concurrent request gets its own independent Lock object, so no actual mutual exclusion happens. A correct lock would need to be a single shared instance (module- or class-level), and even then would only protect against races between threads in the SAME process, not the separate worker processes a real deployment runs - which is exactly why the requirement named both 'thread-' and 'process-safe'. Verified failing against the concurrency regression test: 11/50 increments survived under load."
+    },
+    {
+      "attempt_number": 2,
+      "code_files": {
+        "app/repository.py": "\"\"\"Repository/DAO layer sitting between the API and the database.\n\nincrement_click issues a single atomic ``UPDATE ... SET click_count = click_count + 1``\nstatement rather than reading the value into Python and writing it back. The old\nread-modify-write pattern raced under concurrent redirects: two requests could both\nread the same starting click_count and one increment would be silently lost. A\nsingle UPDATE has no such window - the new value is computed by the database from\nthe current row under the database's own locking, so concurrent increments (across\nthreads, separate connections, or separate processes) are never lost.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom typing import Protocol\n\nfrom sqlalchemy import update\nfrom sqlalchemy.orm import Session\n\nfrom app.models import ShortURL\n\n\nclass URLRepository(Protocol):\n    def create(self, code: str, long_url: str) -> ShortURL: ...\n\n    def get_by_code(self, code: str) -> ShortURL | None: ...\n\n    def increment_click(self, code: str) -> None: ...\n\n    def code_exists(self, code: str) -> bool: ...\n\n\nclass SQLAlchemyURLRepository:\n    def __init__(self, session: Session) -> None:\n        self._session = session\n\n    def create(self, code: str, long_url: str) -> ShortURL:\n        record = ShortURL(code=code, long_url=long_url, click_count=0)\n        self._session.add(record)\n        self._session.commit()\n        self._session.refresh(record)\n        return record\n\n    def get_by_code(self, code: str) -> ShortURL | None:\n        return self._session.query(ShortURL).filter_by(code=code).first()\n\n    def increment_click(self, code: str) -> None:\n        stmt = (\n            update(ShortURL)\n            .where(ShortURL.code == code)\n            .values(click_count=ShortURL.click_count + 1)\n        )\n        # \"fetch\" keeps this session's identity map correct: if a ShortURL for this\n        # code is already loaded (e.g. an earlier create()/get_by_code() call in the\n        # same session), it gets expired so the next read reflects the DB's new\n        # value instead of a stale in-memory copy. The UPDATE itself is what makes\n        # the increment safe; this only guards against local staleness.\n        self._session.execute(stmt, execution_options={\"synchronize_session\": \"fetch\"})\n        self._session.commit()\n\n    def code_exists(self, code: str) -> bool:\n        return self._session.query(ShortURL).filter_by(code=code).first() is not None\n",
+        "tests/test_repository.py": "\"\"\"Unit tests for the repository layer, independent of the HTTP API.\"\"\"\n\nfrom __future__ import annotations\n\nfrom concurrent.futures import ThreadPoolExecutor\nfrom pathlib import Path\n\nfrom sqlalchemy import create_engine\nfrom sqlalchemy.orm import sessionmaker\nfrom sqlalchemy.pool import StaticPool\n\nfrom app.db import Base\nfrom app.repository import SQLAlchemyURLRepository\n\n\ndef _make_repo() -> SQLAlchemyURLRepository:\n    engine = create_engine(\n        \"sqlite:///:memory:\",\n        connect_args={\"check_same_thread\": False},\n        poolclass=StaticPool,\n    )\n    Base.metadata.create_all(bind=engine)\n    session = sessionmaker(bind=engine)()\n    return SQLAlchemyURLRepository(session)\n\n\ndef test_create_and_get_by_code():\n    repo = _make_repo()\n    record = repo.create(code=\"abc1234\", long_url=\"https://example.com\")\n    assert record.click_count == 0\n    fetched = repo.get_by_code(\"abc1234\")\n    assert fetched is not None\n    assert fetched.long_url == \"https://example.com\"\n\n\ndef test_get_by_code_missing_returns_none():\n    repo = _make_repo()\n    assert repo.get_by_code(\"missing\") is None\n\n\ndef test_increment_click_increases_count():\n    repo = _make_repo()\n    repo.create(code=\"abc1234\", long_url=\"https://example.com\")\n    repo.increment_click(\"abc1234\")\n    repo.increment_click(\"abc1234\")\n    fetched = repo.get_by_code(\"abc1234\")\n    assert fetched is not None\n    assert fetched.click_count == 2\n\n\ndef test_increment_click_missing_code_is_noop():\n    repo = _make_repo()\n    repo.increment_click(\"missing\")\n\n\ndef test_code_exists():\n    repo = _make_repo()\n    assert repo.code_exists(\"abc1234\") is False\n    repo.create(code=\"abc1234\", long_url=\"https://example.com\")\n    assert repo.code_exists(\"abc1234\") is True\n\n\ndef test_increment_click_reflects_immediately_in_same_session():\n    \"\"\"Guards against the atomic UPDATE leaving a stale ORM-cached row behind.\"\"\"\n    repo = _make_repo()\n    repo.create(code=\"abc1234\", long_url=\"https://example.com\")\n    # Loads the record into this session's identity map before incrementing, so a\n    # naive bulk UPDATE that doesn't sync the session would leave this cached.\n    repo.get_by_code(\"abc1234\")\n    repo.increment_click(\"abc1234\")\n    fetched = repo.get_by_code(\"abc1234\")\n    assert fetched is not None\n    assert fetched.click_count == 1\n\n\ndef test_increment_click_is_lost_update_free_under_concurrent_threads(tmp_path: Path):\n    \"\"\"Regression test for the click-analytics under-count bug.\n\n    Uses a real file-backed SQLite database (not the shared in-memory StaticPool\n    connection used elsewhere in this file) so each worker thread gets its own\n    physical connection, and a stale-read-then-write race is actually reachable -\n    the same shape of race a real concurrent-connection database (e.g. Postgres,\n    see tests/test_concurrency.py) would hit under concurrent redirects.\n    \"\"\"\n    db_path = tmp_path / \"concurrency.db\"\n    engine = create_engine(\n        f\"sqlite:///{db_path}\",\n        connect_args={\"check_same_thread\": False, \"timeout\": 30},\n    )\n    Base.metadata.create_all(bind=engine)\n    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)\n\n    code = \"race1234\"\n    setup_repo = SQLAlchemyURLRepository(session_factory())\n    setup_repo.create(code=code, long_url=\"https://example.com\")\n\n    concurrent_increments = 40\n\n    def do_increment() -> None:\n        repo = SQLAlchemyURLRepository(session_factory())\n        repo.increment_click(code)\n\n    with ThreadPoolExecutor(max_workers=8) as executor:\n        list(executor.map(lambda _: do_increment(), range(concurrent_increments)))\n\n    verify_repo = SQLAlchemyURLRepository(session_factory())\n    record = verify_repo.get_by_code(code)\n    assert record is not None\n    assert record.click_count == concurrent_increments\n\n    engine.dispose()\n"
+      },
+      "rationale": "Live generation, attempt 1."
+    }
+  ],
+  "gates": {
+    "codebase_impact_review": {
+      "status": "approved",
+      "decided_by": "human"
+    },
+    "merge_release_approval": {
+      "status": "approved",
+      "decided_by": "human"
+    }
+  },
+  "gate_log": [
+    {
+      "gate_type": "codebase_impact_review",
+      "payload": {
+        "gate_type": "codebase_impact_review",
+        "impacted_modules": [
+          "app/auth.py",
+          "app/db.py",
+          "app/models.py",
+          "app/rate_limit.py",
+          "app/repository.py",
+          "app/schemas.py",
+          "tests/conftest.py",
+          "tests/test_api.py",
+          "tests/test_concurrency.py",
+          "tests/test_repository.py"
+        ],
+        "impacted_apis": [
+          "app/main.py"
+        ],
+        "summary": "Scanned C:\\agentic-sdlc-orchestrator\\.fixture_capture_workspace\\brownfield_3 for keywords ['click', 'analytics', 'counter', 'under', 'counts', 'concurrent']...: 10 module(s), 1 API file(s) impacted."
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    },
+    {
+      "gate_type": "merge_release_approval",
+      "payload": {
+        "gate_type": "merge_release_approval",
+        "violations": [],
+        "requirement": "The click-analytics counter under-counts on concurrent redirects; make it thread-/process-safe.",
+        "files_changed": [
+          "app/repository.py",
+          "docs/CHANGE_36dca64b.md",
+          "tests/test_repository.py"
+        ]
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    }
+  ],
+  "final_run_status": "completed"
+}
