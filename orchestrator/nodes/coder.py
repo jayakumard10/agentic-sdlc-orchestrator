@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import tools
@@ -248,6 +249,7 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
         return {
             "safe_stop": True,
             "run_status": "failed",
+            "finished_at": datetime.now(timezone.utc),
             "coder": CoderOutput(attempt_number=attempt_number, rationale=str(exc)),
             "events": [AuditEvent(node="coder", event_type="safe_stop", detail=str(exc))],
         }

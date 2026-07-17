@@ -7,6 +7,7 @@ governance chain, and the checkpointer that makes human-approval gates durable.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -52,6 +53,7 @@ def _rollback(state: GraphState, workspace: Path) -> dict:
     if not target_commit:
         updates["safe_stop"] = True
         updates["run_status"] = "failed"
+        updates["finished_at"] = datetime.now(timezone.utc)
         updates["events"] = [
             AuditEvent(
                 node="rollback",
@@ -85,6 +87,7 @@ def _rollback(state: GraphState, workspace: Path) -> dict:
             )
         ]
 
+    updates["finished_at"] = datetime.now(timezone.utc)
     return updates
 
 

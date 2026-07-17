@@ -14,6 +14,7 @@ for graph.py's routing (Phase 3) to send to rollback.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from langgraph.types import interrupt
@@ -90,6 +91,7 @@ def release_gate(state: GraphState, workspace: Path) -> dict:
             f"[{state.scenario_type}] {state.requirement_clarified or state.requirement_raw}",
         )
         updates["run_status"] = "completed"
+        updates["finished_at"] = datetime.now(timezone.utc)
         events.append(
             AuditEvent(
                 node="release_gate",
