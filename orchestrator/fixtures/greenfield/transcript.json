@@ -1,0 +1,108 @@
+{
+  "scenario_type": "greenfield",
+  "requirement_raw": "Add a QR code generation endpoint for shortened URLs, returning a PNG the client can embed.",
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "code_files": {
+        "app/qr.py": "\"\"\"QR code endpoint: renders a short URL's redirect target as a PNG QR code.\n\nKept as an isolated APIRouter in its own module so app.main's existing endpoints\nare untouched - wiring it in is a single app.include_router() call.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport io\n\nimport qrcode\nfrom fastapi import APIRouter, Depends, HTTPException\nfrom fastapi.responses import Response\nfrom sqlalchemy.orm import Session\n\nfrom app.db import get_session\nfrom app.repository import SQLAlchemyURLRepository, URLRepository\n\nrouter = APIRouter()\n\n\ndef get_repository(session: Session = Depends(get_session)) -> URLRepository:\n    return SQLAlchemyURLRepository(session)\n\n\n@router.get(\"/{code}/qr\")\ndef get_qr_code(code: str, repo: URLRepository = Depends(get_repository)) -> Response:\n    record = repo.get_by_code(code)\n    if record is None:\n        raise HTTPException(status_code=404, detail=\"short URL not found\")\n\n    image = qrcode.make(record.long_url)\n    buffer = io.BytesIO()\n    image.save(buffer, format=\"PNG\")\n    return Response(content=buffer.getvalue(), media_type=\"image/png\")\n",
+        "app/main.py": "\"\"\"FastAPI entry point: the URL shortener's core APIs, analytics, and reliability feature.\"\"\"\n\nfrom __future__ import annotations\n\nimport secrets\nimport string\nfrom collections.abc import AsyncIterator\nfrom contextlib import asynccontextmanager\n\nfrom fastapi import Depends, FastAPI, HTTPException, Request\nfrom fastapi.responses import RedirectResponse\nfrom sqlalchemy.orm import Session\n\nfrom app import rate_limit\nfrom app.auth import require_api_key\nfrom app.db import get_session, init_db\nfrom app.qr import router as qr_router\nfrom app.repository import SQLAlchemyURLRepository, URLRepository\nfrom app.schemas import ShortenRequest, ShortenResponse, StatsResponse\n\n_CODE_ALPHABET = string.ascii_letters + string.digits\n_CODE_LENGTH = 7\n_MAX_CODE_GENERATION_ATTEMPTS = 10\n\n\n@asynccontextmanager\nasync def lifespan(app: FastAPI) -> AsyncIterator[None]:\n    init_db()\n    yield\n\n\napp = FastAPI(title=\"URL Shortener\", lifespan=lifespan)\napp.include_router(qr_router)\n\n\ndef get_repository(session: Session = Depends(get_session)) -> URLRepository:\n    return SQLAlchemyURLRepository(session)\n\n\ndef _generate_unique_code(repo: URLRepository) -> str:\n    for _ in range(_MAX_CODE_GENERATION_ATTEMPTS):\n        candidate = \"\".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))\n        if not repo.code_exists(candidate):\n            return candidate\n    raise HTTPException(status_code=500, detail=\"failed to generate a unique short code\")\n\n\n@app.get(\"/health\")\ndef health() -> dict[str, str]:\n    return {\"status\": \"ok\"}\n\n\n@app.post(\n    \"/shorten\",\n    response_model=ShortenResponse,\n    status_code=201,\n    dependencies=[Depends(require_api_key)],\n)\ndef shorten(\n    payload: ShortenRequest,\n    request: Request,\n    repo: URLRepository = Depends(get_repository),\n) -> ShortenResponse:\n    client_key = request.client.host if request.client else \"unknown\"\n    if not rate_limit.is_allowed(client_key):\n        raise HTTPException(status_code=429, detail=\"rate limit exceeded, try again later\")\n\n    code = _generate_unique_code(repo)\n    long_url = str(payload.long_url)\n    repo.create(code=code, long_url=long_url)\n    return ShortenResponse(code=code, short_url=f\"/{code}\", long_url=long_url)\n\n\n@app.get(\n    \"/{code}/stats\",\n    response_model=StatsResponse,\n    dependencies=[Depends(require_api_key)],\n)\ndef stats(code: str, repo: URLRepository = Depends(get_repository)) -> StatsResponse:\n    record = repo.get_by_code(code)\n    if record is None:\n        raise HTTPException(status_code=404, detail=\"short URL not found\")\n    return StatsResponse(\n        code=record.code,\n        long_url=record.long_url,\n        click_count=record.click_count,\n        created_at=record.created_at,\n    )\n\n\n@app.get(\"/{code}\")\ndef redirect(code: str, repo: URLRepository = Depends(get_repository)) -> RedirectResponse:\n    record = repo.get_by_code(code)\n    if record is None:\n        raise HTTPException(status_code=404, detail=\"short URL not found\")\n    repo.increment_click(code)\n    return RedirectResponse(url=record.long_url, status_code=307)\n",
+        "tests/test_qr.py": "\"\"\"Tests for the GET /{code}/qr PNG QR code endpoint.\"\"\"\n\nfrom __future__ import annotations\n\nimport io\n\nimport qrcode\n\n\ndef test_qr_code_returns_png_encoding_long_url(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/some/page\"})\n    assert shorten_response.status_code == 201\n    code = shorten_response.json()[\"code\"]\n\n    response = client.get(f\"/{code}/qr\")\n\n    assert response.status_code == 200\n    assert response.headers[\"content-type\"] == \"image/png\"\n    assert response.content.startswith(b\"\\x89PNG\\r\\n\\x1a\\n\")\n\n    expected_image = qrcode.make(\"https://example.com/some/page\")\n    expected_buffer = io.BytesIO()\n    expected_image.save(expected_buffer, format=\"PNG\")\n    assert response.content == expected_buffer.getvalue()\n\n\ndef test_qr_code_differs_for_different_long_urls(client):\n    first = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/first\"})\n    second = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/second\"})\n\n    first_qr = client.get(f\"/{first.json()['code']}/qr\")\n    second_qr = client.get(f\"/{second.json()['code']}/qr\")\n\n    assert first_qr.content != second_qr.content\n\n\ndef test_qr_code_unknown_code_returns_404(client):\n    response = client.get(\"/doesnotexist/qr\")\n    assert response.status_code == 404\n\n\ndef test_qr_code_does_not_require_api_key(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    code = shorten_response.json()[\"code\"]\n\n    client.headers.pop(\"X-API-Key\", None)\n    response = client.get(f\"/{code}/qr\")\n\n    assert response.status_code == 200\n\n\ndef test_existing_stats_endpoint_still_reachable_alongside_qr_route(client):\n    shorten_response = client.post(\"/shorten\", json={\"long_url\": \"https://example.com/x\"})\n    code = shorten_response.json()[\"code\"]\n\n    stats_response = client.get(f\"/{code}/stats\")\n\n    assert stats_response.status_code == 200\n    assert stats_response.json()[\"code\"] == code\n"
+      },
+      "rationale": "Live generation, attempt 1."
+    }
+  ],
+  "gates": {
+    "clarification_approval": {
+      "status": "approved",
+      "clarified_requirement": "Add a GET /{code}/qr endpoint that returns a PNG QR code encoding the short URL's redirect target, as a new app/qr.py module with no changes to existing endpoints.",
+      "decided_by": "human"
+    },
+    "plan_approval": {
+      "status": "approved",
+      "decided_by": "human"
+    },
+    "merge_release_approval": {
+      "status": "approved",
+      "decided_by": "human"
+    }
+  },
+  "gate_log": [
+    {
+      "gate_type": "clarification_approval",
+      "payload": {
+        "gate_type": "clarification_approval",
+        "requirement_raw": "Add a QR code generation endpoint for shortened URLs, returning a PNG the client can embed.",
+        "ambiguities": [],
+        "proposed_clarification": "Add a QR code generation endpoint for shortened URLs, returning a PNG the client can embed."
+      },
+      "decision": {
+        "status": "approved",
+        "clarified_requirement": "Add a GET /{code}/qr endpoint that returns a PNG QR code encoding the short URL's redirect target, as a new app/qr.py module with no changes to existing endpoints.",
+        "decided_by": "human"
+      }
+    },
+    {
+      "gate_type": "plan_approval",
+      "payload": {
+        "gate_type": "plan_approval",
+        "tasks": [
+          {
+            "id": "T1",
+            "description": "Implement: Greenfield: introduce new component(s) to satisfy 'Add a GET /{code}/qr endpoint that returns a PNG QR code encoding the short URL's redirect target, as a new app/qr.py module with no changes to existing endpoints.'. No existing modules to integrate against beyond the target app's existing FastAPI app instance and repository layer.",
+            "depends_on": [],
+            "status": "pending"
+          },
+          {
+            "id": "T2",
+            "description": "Write/update unit tests for the change",
+            "depends_on": [
+              "T1"
+            ],
+            "status": "pending"
+          },
+          {
+            "id": "T3",
+            "description": "Update target-app documentation for the change",
+            "depends_on": [
+              "T1"
+            ],
+            "status": "pending"
+          },
+          {
+            "id": "T4",
+            "description": "Run guardrail checks and prepare for release",
+            "depends_on": [
+              "T2",
+              "T3"
+            ],
+            "status": "pending"
+          }
+        ]
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    },
+    {
+      "gate_type": "merge_release_approval",
+      "payload": {
+        "gate_type": "merge_release_approval",
+        "violations": [],
+        "requirement": "Add a GET /{code}/qr endpoint that returns a PNG QR code encoding the short URL's redirect target, as a new app/qr.py module with no changes to existing endpoints.",
+        "files_changed": [
+          "app/main.py",
+          "app/qr.py",
+          "docs/CHANGE_7c48191d.md",
+          "tests/test_qr.py"
+        ]
+      },
+      "decision": {
+        "status": "approved",
+        "decided_by": "human"
+      }
+    }
+  ],
+  "final_run_status": "completed"
+}
