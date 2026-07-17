@@ -13,8 +13,7 @@ The primary deliverable is **the orchestrator itself**. The system it builds/evo
 — a small URL-shortener service — is the demo substrate that proves it actually
 works, not the point of the exercise.
 
-> **Demo recording:** *(placeholder — see "Recording your own demo GIF" below for
-> the fastest path to filling this in.)*
+![Demo: shortening a real URL and reading back the redirect + analytics](docs/demo.gif)
 
 ## Example output (real, captured from an actual run)
 
@@ -52,27 +51,22 @@ scenario's task list visibly changing from 4 tasks to "5 tasks (revised plan)" a
 its re-planning gate) are in [docs/scenarios/](docs/scenarios/) — every one
 annotated with what it demonstrates and why, not just pasted output.
 
-### Recording your own demo GIF
+### Re-recording the demo GIF
 
-This environment doesn't have a GUI session to capture from, so I can't produce a
-real recording — but here's the fastest path for you to do it once this is on your
-machine:
+The recording above shows [`scripts/demo_shorten_url.ps1`](scripts/demo_shorten_url.ps1)
+in action — a real long URL shortened, redirected, and its click count read back.
+To update it (e.g. after a change to the target app):
 
-1. Install **[ScreenToGif](https://www.screentogif.com/)** (Windows, free, ~5MB,
-   captures directly to GIF with no post-processing step) — or if you're on
-   Mac/Linux, `Cmd+Shift+5` (macOS built-in) or [Peek](https://github.com/phw/peek)
-   (Linux) work just as well.
-2. Bring up the stack first (`docker compose up -d postgres target_app`, or the
-   full `docker compose up --build` if you also want the orchestration logs
-   available), in a terminal sized to something reasonable (~100×30).
-3. Start recording, then run [`.\scripts\demo_shorten_url.ps1`](scripts/demo_shorten_url.ps1)
-   (a real long URL shortened, redirected, and its click count read back — more
-   immediately understandable to a general audience than the orchestration logs).
-   Stop recording a couple seconds after the analytics line prints.
-4. Drop the file at `docs/demo.gif` and replace the placeholder line above with
-   `![Demo](docs/demo.gif)`.
+1. **[ScreenToGif](https://www.screentogif.com/)** (Windows, free, ~5MB, captures
+   directly to GIF) — or `Cmd+Shift+5` (macOS built-in) / [Peek](https://github.com/phw/peek)
+   (Linux).
+2. Bring up the stack (`docker compose up -d postgres target_app`), terminal sized
+   to something reasonable (~100×30).
+3. Start recording, run the script, stop a couple seconds after the analytics
+   line prints.
+4. Overwrite `docs/demo.gif`.
 
-For the orchestration-focused recording instead (or in addition), swap step 3 for
+For an orchestration-focused recording instead (or in addition), record
 `docker compose up --build` and stop at `=== All scenarios complete ===` (~15–20s).
 
 ## Quickstart (30 seconds, nothing to configure)
