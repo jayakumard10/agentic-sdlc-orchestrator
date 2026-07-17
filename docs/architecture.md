@@ -168,7 +168,11 @@ Concrete, not aspirational:
   regardless of what the raw approve/reject status says**, as defense in depth
   against a human clicking "approve" without noticing a flagged violation; (2)
   DDL/schema-altering statements are flagged the same way; (3) secret-shaped
-  strings are flagged the same way.
+  strings are flagged the same way. Mapped to policy intent: (1) is a security
+  concern (arbitrary code execution), (2) is a change-control concern (schema
+  changes routed through explicit review rather than landing silently), and (3)
+  serves both security and compliance (credential/PII leakage prevention) at
+  once — one rule, two policy concerns, rather than a forced 1:1 split.
 - **Telemetry**: one `AuditEvent` stream, two projections — a JSON-lines file
   (`orchestrator/telemetry.py`'s `TelemetrySink`, one record per node
   execution/gate/retry/rollback) and a derived console trace. Not two
