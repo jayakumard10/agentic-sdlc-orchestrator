@@ -152,6 +152,11 @@ class GraphState(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
 
     coder: CoderOutput = Field(default_factory=CoderOutput)
+    # Every Coder invocation appends here too (operator.add), so a retry loop's earlier
+    # (failed) attempts stay inspectable in the audit trail instead of being silently
+    # overwritten by `coder` once a later attempt supersedes them - this is exactly the
+    # data fixture capture and any "why did it retry" review needs.
+    coder_attempts: Annotated[list[CoderOutput], operator.add] = Field(default_factory=list)
     test: TestResult = Field(default_factory=TestResult)
     documentation: DocumentationOutput = Field(default_factory=DocumentationOutput)
 

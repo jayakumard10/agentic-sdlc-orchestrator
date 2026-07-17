@@ -163,4 +163,4 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
         )
     ]
 
-    return {"coder": coder_output, "events": events}
+    return {"coder": coder_output, "coder_attempts": [coder_output], "events": events}
