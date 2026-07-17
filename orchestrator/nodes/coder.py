@@ -51,8 +51,25 @@ def _available_dependencies_note(workspace: Path) -> str | None:
     )
 
 
+def _task_plan_note(state: GraphState) -> str | None:
+    """Surface the Decomposer/Planner's task list, including any re-planning revision.
+
+    Without this, the re-planning mechanism (Re-planner + Decomposer/Planner's revised
+    T0 reconciliation task) only ever affects orchestrator state - the actual
+    instruction handed to Coder would still be the raw clarified requirement with no
+    scope guidance, defeating the point of re-planning. Concretely: for the ambiguous
+    scenario, T0 says to reconcile with existing rate-limiting middleware rather than
+    duplicate it - Coder needs to see that, not just know it happened.
+    """
+    if not state.tasks:
+        return None
+    lines = [f"- [{task.id}] {task.description}" for task in state.tasks]
+    return "Planned tasks (respect scope - do not touch files outside this plan unless a task requires it):\n" + "\n".join(lines)
+
+
 def _build_prompt(state: GraphState, workspace: Path) -> str:
     dependency_note = _available_dependencies_note(workspace)
+    task_note = _task_plan_note(state)
 
     if state.fallback_triggered:
         lines = [
@@ -73,8 +90,17 @@ def _build_prompt(state: GraphState, workspace: Path) -> str:
         if state.test.failures:
             lines.append("The previous attempt failed these tests - fix the root cause:")
             lines.extend(f"- {failure}" for failure in state.test.failures)
+    if task_note:
+        lines.append(task_note)
     if dependency_note:
         lines.append(dependency_note)
+    lines.append(
+        "Prefer the smallest change that satisfies the requirement. If you change a "
+        "shared module (e.g. models.py) in a way that breaks its existing importers, "
+        "you MUST also return updated versions of every one of those importer files "
+        "in this same response - a partial update that leaves the rest of the "
+        "codebase inconsistent is not acceptable."
+    )
     lines.append(
         "Include pytest test file(s) under tests/ covering the new/changed behavior, "
         "not just the implementation."
