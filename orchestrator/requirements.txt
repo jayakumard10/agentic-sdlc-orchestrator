@@ -1,0 +1,7 @@
+langgraph==1.2.9
+langgraph-checkpoint-postgres==3.0.5
+psycopg[binary]==3.2.3
+pydantic==2.10.4
+python-dotenv==1.0.1
+pytest==8.3.4
+pytest-cov==6.0.0

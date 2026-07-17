@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv312/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker
+docker-compose.override.yml
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env/secrets (defense in depth — this project has no API key, but keep this in place)
+.env
+.env.local
+
+# Candidate planning notes — derived from a confidentiality-marked assignment brief,
+# never to be committed to the public submission repo
+PLANNING.md
