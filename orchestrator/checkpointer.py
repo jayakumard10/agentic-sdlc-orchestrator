@@ -11,8 +11,12 @@ self-maintaining as state.py grows, and keeps MemorySaver (tests) and PostgresSa
 from __future__ import annotations
 
 import inspect
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import BaseModel
 
@@ -34,7 +38,32 @@ def build_serde() -> JsonPlusSerializer:
 def build_memory_checkpointer() -> MemorySaver:
     """In-memory checkpointer for unit/smoke tests only.
 
-    The running orchestrator always uses PostgresSaver (see build_postgres_checkpointer,
-    added in Phase 3) so a pending approval gate survives a container restart.
+    The running orchestrator always uses PostgresSaver (build_postgres_checkpointer
+    below) so a pending approval gate survives a container restart.
     """
     return MemorySaver(serde=build_serde())
+
+
+def _postgres_conn_string() -> str:
+    user = os.environ.get("POSTGRES_USER", "orchestrator")
+    password = os.environ.get("POSTGRES_PASSWORD", "orchestrator")
+    host = os.environ.get("POSTGRES_HOST", "postgres")
+    port = os.environ.get("POSTGRES_PORT", "5432")
+    database = os.environ.get("POSTGRES_DB", "orchestrator")
+    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+
+@contextmanager
+def build_postgres_checkpointer() -> Iterator[PostgresSaver]:
+    """Durable checkpointer for the running orchestrator.
+
+    A pending approval gate must survive a container restart mid-demo; MemorySaver
+    would silently lose it. `PostgresSaver.from_conn_string` constructs its instance
+    internally without a serde argument, so the shared allowlisted serde is assigned
+    right after entering the context, before `.setup()` (idempotent - safe to call on
+    every startup) creates the checkpoint tables if they don't already exist.
+    """
+    with PostgresSaver.from_conn_string(_postgres_conn_string()) as checkpointer:
+        checkpointer.serde = build_serde()
+        checkpointer.setup()
+        yield checkpointer

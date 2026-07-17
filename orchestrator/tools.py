@@ -193,5 +193,12 @@ def git_commit_all(workspace: Path, message: str) -> str:
 
 
 def git_revert_to(workspace: Path, commit_sha: str) -> None:
-    """Rollback: hard-reset the target-app workspace to a prior known-good commit."""
+    """Rollback: hard-reset the target-app workspace to a prior known-good commit.
+
+    `git reset --hard` alone only rewinds tracked files - it leaves untracked files
+    (like a Coder attempt that was written but never committed, which is exactly the
+    rollback scenario) sitting on disk. `git clean -fd` after the reset is required
+    to actually discard them.
+    """
     _run_git(workspace, "reset", "--hard", commit_sha)
+    _run_git(workspace, "clean", "-fd")
