@@ -24,6 +24,7 @@ from langgraph.types import Command  # noqa: E402
 
 from checkpointer import build_memory_checkpointer  # noqa: E402
 from graph import build_graph  # noqa: E402
+from logging_config import configure_logging  # noqa: E402
 from scenarios._shared import (  # noqa: E402
     FIXTURES_DIR,
     REPO_ROOT,
@@ -31,6 +32,8 @@ from scenarios._shared import (  # noqa: E402
     seed_workspace,
 )
 from state import GraphState  # noqa: E402
+
+configure_logging()
 
 _CAPTURE_WORKSPACE_ROOT = REPO_ROOT / ".fixture_capture_workspace"
 

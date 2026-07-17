@@ -8,7 +8,10 @@ not just "no commit to roll back to".
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 import tools
 from graph import (
@@ -22,7 +25,7 @@ from graph import (
 from state import CoderOutput, GateRecord, GraphState
 
 
-def test_rollback_to_invalid_commit_safe_stops(tmp_path: Path):
+def test_rollback_to_invalid_commit_safe_stops(tmp_path: Path, caplog: pytest.LogCaptureFixture):
     tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
     tools.git_commit_all(tmp_path, "initial")
 
@@ -31,11 +34,34 @@ def test_rollback_to_invalid_commit_safe_stops(tmp_path: Path):
         requirement_raw="x",
         coder=CoderOutput(commit_sha_before="0000000000000000000000000000000000dead"),
     )
-    result = _rollback(state, workspace=tmp_path)
+    with caplog.at_level(logging.ERROR, logger="graph"):
+        result = _rollback(state, workspace=tmp_path)
     assert result["safe_stop"] is True
     assert result["run_status"] == "failed"
     assert result["rollback_count"] == 1
     assert "rollback failed" in result["events"][0].detail
+    assert any("revert" in record.message and "failed" in record.message for record in caplog.records)
+
+
+def test_rollback_with_no_known_good_commit_logs_error(caplog: pytest.LogCaptureFixture):
+    state = GraphState(scenario_type="brownfield", requirement_raw="x")
+    with caplog.at_level(logging.ERROR, logger="graph"):
+        _rollback(state, workspace=Path("."))
+    assert any("no known-good commit" in record.message for record in caplog.records)
+
+
+def test_rollback_to_known_good_commit_logs_info(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
+    sha = tools.git_commit_all(tmp_path, "initial")
+    state = GraphState(
+        scenario_type="brownfield",
+        requirement_raw="x",
+        coder=CoderOutput(commit_sha_before=sha),
+    )
+    with caplog.at_level(logging.INFO, logger="graph"):
+        result = _rollback(state, workspace=tmp_path)
+    assert "safe_stop" not in result
+    assert any("Rolled back" in record.message for record in caplog.records)
 
 
 def test_route_after_clarifier_greenfield_skips_codebase_reasoner():

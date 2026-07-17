@@ -11,6 +11,7 @@ self-maintaining as state.py grows, and keeps MemorySaver (tests) and PostgresSa
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,6 +22,8 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import BaseModel
 
 import state as state_module
+
+logger = logging.getLogger(__name__)
 
 
 def _discover_state_model_allowlist() -> list[tuple[str, str]]:
@@ -41,6 +44,7 @@ def build_memory_checkpointer() -> MemorySaver:
     The running orchestrator always uses PostgresSaver (build_postgres_checkpointer
     below) so a pending approval gate survives a container restart.
     """
+    logger.info("Using MemorySaver checkpointer (in-memory, not durable)")
     return MemorySaver(serde=build_serde())
 
 
@@ -63,6 +67,10 @@ def build_postgres_checkpointer() -> Iterator[PostgresSaver]:
     right after entering the context, before `.setup()` (idempotent - safe to call on
     every startup) creates the checkpoint tables if they don't already exist.
     """
+    host = os.environ.get("POSTGRES_HOST", "postgres")
+    port = os.environ.get("POSTGRES_PORT", "5432")
+    database = os.environ.get("POSTGRES_DB", "orchestrator")
+    logger.info("Using PostgresSaver checkpointer at %s:%s/%s", host, port, database)
     with PostgresSaver.from_conn_string(_postgres_conn_string()) as checkpointer:
         checkpointer.serde = build_serde()
         checkpointer.setup()

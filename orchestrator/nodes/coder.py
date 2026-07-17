@@ -11,6 +11,7 @@ path needs no login at all. Both paths converge on the same output shape
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from pathlib import Path
 
 import tools
 from state import AuditEvent, CoderOutput, GraphState
+
+logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-5"
 # 300s was too tight for a retry prompt covering several files - observed a genuine
@@ -177,9 +180,11 @@ def _invoke_claude_cli(prompt: str, workspace: Path) -> dict[str, str]:
     last_error: Exception | None = None
     for attempt in range(1, _CLI_CALL_ATTEMPTS + 1):
         try:
+            logger.info("Invoking claude CLI in %s (attempt %d/%d)", workspace, attempt, _CLI_CALL_ATTEMPTS)
             return _invoke_claude_cli_once(prompt, workspace)
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
             last_error = exc
+            logger.warning("claude CLI call failed (attempt %d/%d): %s", attempt, _CLI_CALL_ATTEMPTS, exc)
             if attempt < _CLI_CALL_ATTEMPTS:
                 time.sleep(_CLI_RETRY_DELAY_SECONDS)
     assert last_error is not None
@@ -246,6 +251,7 @@ def coder(state: GraphState, workspace: Path, fixtures_dir: Path) -> dict:
             fixture_source = str(fixtures_dir / state.scenario_type / "transcript.json")
             rationale = entry.get("rationale", "")
     except _FIXTURE_FAILURE_TYPES as exc:
+        logger.error("Coder safe-stop on attempt %d: %s", attempt_number, exc)
         return {
             "safe_stop": True,
             "run_status": "failed",

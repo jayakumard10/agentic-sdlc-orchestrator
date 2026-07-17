@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class SandboxedTestRun(BaseModel):
@@ -36,6 +39,7 @@ def run_pytest_sandboxed(
     if not workdir.is_dir():
         raise FileNotFoundError(f"Test workdir does not exist: {workdir}")
 
+    logger.debug("Running pytest in %s (timeout=%ss)", workdir, timeout_seconds)
     start = time.monotonic()
     try:
         proc = subprocess.run(
@@ -45,15 +49,23 @@ def run_pytest_sandboxed(
             text=True,
             timeout=timeout_seconds,
         )
+        duration = time.monotonic() - start
+        if proc.returncode == 0:
+            logger.debug("pytest passed in %s (%.1fs)", workdir, duration)
+        else:
+            logger.warning(
+                "pytest failed in %s: returncode=%s (%.1fs)", workdir, proc.returncode, duration
+            )
         return SandboxedTestRun(
             passed=proc.returncode == 0,
             returncode=proc.returncode,
             stdout=proc.stdout,
             stderr=proc.stderr,
             timed_out=False,
-            duration_seconds=time.monotonic() - start,
+            duration_seconds=duration,
         )
     except subprocess.TimeoutExpired as exc:
+        logger.warning("pytest timed out in %s after %ss", workdir, timeout_seconds)
         return SandboxedTestRun(
             passed=False,
             returncode=-1,
@@ -125,6 +137,10 @@ def evaluate_guardrails(code_files: dict[str, str]) -> list[GuardrailFinding]:
                             snippet=line.strip(),
                         )
                     )
+    for finding in findings:
+        logger.warning(
+            "Guardrail hit: rule=%s file=%s line=%s", finding.rule, finding.file, finding.line
+        )
     return findings
 
 
@@ -155,6 +171,7 @@ def _run_git(workspace: Path, *args: str) -> str:
         text=True,
     )
     if proc.returncode != 0:
+        logger.error("git %s failed in %s: %s", " ".join(args), workspace, proc.stderr.strip())
         raise GitOperationError(f"git {' '.join(args)} failed in {workspace}: {proc.stderr.strip()}")
     return proc.stdout.strip()
 
@@ -187,9 +204,12 @@ def git_commit_all(workspace: Path, message: str) -> str:
     _run_git(workspace, "add", "-A")
     status = _run_git(workspace, "status", "--porcelain")
     if not status:
+        logger.debug("git_commit_all: no changes in %s, skipping commit", workspace)
         return git_current_commit(workspace) or ""
     _run_git(workspace, "commit", "-m", message)
-    return git_current_commit(workspace) or ""
+    sha = git_current_commit(workspace) or ""
+    logger.info("Committed %s in %s: %s", sha[:8], workspace, message)
+    return sha
 
 
 def git_revert_to(workspace: Path, commit_sha: str) -> None:
@@ -200,5 +220,6 @@ def git_revert_to(workspace: Path, commit_sha: str) -> None:
     rollback scenario) sitting on disk. `git clean -fd` after the reset is required
     to actually discard them.
     """
+    logger.warning("Rolling back %s to %s", workspace, commit_sha[:8])
     _run_git(workspace, "reset", "--hard", commit_sha)
     _run_git(workspace, "clean", "-fd")

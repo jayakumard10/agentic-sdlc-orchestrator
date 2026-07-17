@@ -6,6 +6,7 @@ governance chain, and the checkpointer that makes human-approval gates durable.
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from functools import partial
@@ -26,6 +27,8 @@ from nodes.replanner import replanner
 from nodes.requirement_clarifier import requirement_clarifier
 from nodes.test_executor import test_executor
 from state import AuditEvent, GraphState
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -51,6 +54,7 @@ def _rollback(state: GraphState, workspace: Path) -> dict:
     updates: dict = {"rollback_count": state.rollback_count + 1}
 
     if not target_commit:
+        logger.error("Rollback safe-stop: no known-good commit recorded for %s", workspace)
         updates["safe_stop"] = True
         updates["run_status"] = "failed"
         updates["finished_at"] = datetime.now(timezone.utc)
@@ -66,6 +70,7 @@ def _rollback(state: GraphState, workspace: Path) -> dict:
 
     try:
         tools.git_revert_to(workspace, target_commit)
+        logger.info("Rolled back %s to %s", workspace, target_commit[:8])
         updates["run_status"] = "failed"
         updates["events"] = [
             AuditEvent(
@@ -76,6 +81,7 @@ def _rollback(state: GraphState, workspace: Path) -> dict:
             )
         ]
     except tools.GitOperationError as exc:
+        logger.error("Rollback safe-stop: revert to %s failed for %s: %s", target_commit[:8], workspace, exc)
         updates["safe_stop"] = True
         updates["run_status"] = "failed"
         updates["events"] = [

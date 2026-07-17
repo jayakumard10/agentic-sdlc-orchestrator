@@ -23,10 +23,13 @@ from langgraph.types import Command  # noqa: E402
 
 from checkpointer import build_memory_checkpointer, build_postgres_checkpointer  # noqa: E402
 from graph import build_graph  # noqa: E402
+from logging_config import configure_logging  # noqa: E402
 from metrics import compute_metrics, summarize_run  # noqa: E402
 from scenarios._shared import FIXTURES_DIR, REPO_ROOT, SCENARIO_REQUIREMENTS, seed_workspace  # noqa: E402
 from state import GraphState  # noqa: E402
 from telemetry import TelemetrySink  # noqa: E402
+
+configure_logging()
 
 _RUN_WORKSPACE_ROOT = REPO_ROOT / ".scenario_runs"
 _TELEMETRY_DIR = _RUN_WORKSPACE_ROOT / "telemetry"

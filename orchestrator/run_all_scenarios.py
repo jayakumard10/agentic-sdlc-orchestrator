@@ -31,7 +31,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from logging_config import configure_logging  # noqa: E402
 from scenarios._runner import run_scenario  # noqa: E402
+
+configure_logging()
 
 _SCENARIOS_IN_ORDER = ["greenfield", "brownfield", "ambiguous"]
 _SCRATCH_ROOT = Path("/tmp/scenario_runs")

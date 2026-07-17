@@ -6,6 +6,7 @@ during integration testing).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,12 @@ def test_evaluate_guardrails_clean_code_has_no_findings():
     assert findings == []
 
 
+def test_evaluate_guardrails_logs_a_warning_per_finding(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.WARNING, logger="tools"):
+        tools.evaluate_guardrails({"bad.py": "eval(user_input)\n"})
+    assert any("Guardrail hit" in record.message for record in caplog.records)
+
+
 def test_git_commit_all_then_rollback_restores_tracked_file(tmp_path: Path):
     tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
     sha1 = tools.git_commit_all(tmp_path, "initial commit")
@@ -122,3 +129,21 @@ def test_git_operation_error_raised_on_invalid_revert_target(tmp_path: Path):
     tools.git_commit_all(tmp_path, "initial")
     with pytest.raises(tools.GitOperationError):
         tools.git_revert_to(tmp_path, "0000000000000000000000000000000000dead")
+
+
+def test_git_operation_error_logs_before_raising(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
+    tools.git_commit_all(tmp_path, "initial")
+    with caplog.at_level(logging.ERROR, logger="tools"):
+        with pytest.raises(tools.GitOperationError):
+            tools.git_revert_to(tmp_path, "0000000000000000000000000000000000dead")
+    assert any("git" in record.message and "failed" in record.message for record in caplog.records)
+
+
+def test_git_commit_all_logs_info_on_real_commit(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.INFO, logger="tools"):
+        tools.write_code_files(tmp_path, {"app/ok.py": "x = 1\n"})
+        tools.git_commit_all(tmp_path, "initial commit")
+    assert any("Committed" in record.message for record in caplog.records)
