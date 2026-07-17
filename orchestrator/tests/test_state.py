@@ -5,13 +5,32 @@ used to persist its nested Pydantic submodels.
 
 from __future__ import annotations
 
-import operator
-from typing import Annotated
+import os
 
+import pytest
 from langgraph.graph import END, START, StateGraph
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 
-from checkpointer import _discover_state_model_allowlist, build_memory_checkpointer
+from checkpointer import (
+    _discover_state_model_allowlist,
+    _postgres_conn_string,
+    build_memory_checkpointer,
+    build_postgres_checkpointer,
+)
 from state import AuditEvent, CoderOutput, GraphState, RunMetrics
+
+
+def _postgres_reachable() -> bool:
+    if not os.environ.get("POSTGRES_USER"):
+        return False
+    try:
+        url = _postgres_conn_string().replace("postgresql://", "postgresql+psycopg://", 1)
+        connection = create_engine(url).connect()
+        connection.close()
+        return True
+    except OperationalError:
+        return False
 
 
 def test_graph_state_requires_scenario_type():
@@ -124,3 +143,31 @@ def test_memory_checkpointer_round_trips_nested_submodels():
         config=config,
     )
     assert result["metrics"].success_rate == 1.0
+
+
+@pytest.mark.skipif(
+    not _postgres_reachable(), reason="requires PostgreSQL reachable via POSTGRES_* env vars"
+)
+def test_postgres_checkpointer_round_trips_and_survives_a_fresh_connection():
+    """The whole reason PostgresSaver was chosen over MemorySaver: a pending gate
+
+    must survive something equivalent to a container restart. Simulates that by
+    entering a *second*, independent build_postgres_checkpointer() context and
+    confirming it can resume a thread a prior context paused.
+    """
+    graph = StateGraph(GraphState)
+    graph.add_node("noop", lambda state: {"requirement_clarified": "seen"})
+    graph.add_edge(START, "noop")
+    graph.add_edge("noop", END)
+
+    config = {"configurable": {"thread_id": "postgres-durability-test"}}
+
+    with build_postgres_checkpointer() as checkpointer:
+        compiled = graph.compile(checkpointer=checkpointer)
+        compiled.invoke(GraphState(scenario_type="brownfield", requirement_raw="x"), config=config)
+
+    # fresh checkpointer instance/connection - simulates resuming after a restart
+    with build_postgres_checkpointer() as checkpointer2:
+        compiled2 = graph.compile(checkpointer=checkpointer2)
+        state = compiled2.get_state(config)
+        assert state.values["requirement_clarified"] == "seen"

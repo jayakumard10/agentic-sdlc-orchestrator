@@ -1,0 +1,9 @@
+[run]
+source = .
+omit =
+    tests/*
+    */pytest-of-*/*
+    */site-packages/*
+
+[report]
+precision = 1
