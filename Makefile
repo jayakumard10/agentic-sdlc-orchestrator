@@ -37,4 +37,15 @@ clean: ## Remove containers, networks, and volumes (destructive - resets postgre
 	docker compose down -v
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo up                 Start the full stack (build + run all 3 demos, then exit)
+	@echo down                Stop and remove all containers, networks (keeps volumes)
+	@echo build                Build both images without starting anything
+	@echo logs                Follow orchestrator container output
+	@echo demo-greenfield       Run only the greenfield scenario
+	@echo demo-brownfield       Run only the brownfield scenario
+	@echo demo-ambiguous        Run only the ambiguous scenario
+	@echo test                Run both test suites
+	@echo test-orchestrator     Run the orchestrator's own test suite
+	@echo test-target-app       Run the target app's test suite
+	@echo coverage             Regenerate both coverage reports
+	@echo clean                Remove containers, networks, and volumes (destructive)

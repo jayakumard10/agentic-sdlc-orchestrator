@@ -13,21 +13,76 @@ The primary deliverable is **the orchestrator itself**. The system it builds/evo
 — a small URL-shortener service — is the demo substrate that proves it actually
 works, not the point of the exercise.
 
-> **Demo recording:** *(placeholder — drop a short screen recording or GIF of
-> `make up` here, e.g. captured with [ScreenToGif](https://www.screentogif.com/),
-> LICEcap, or Windows' built-in Xbox Game Bar `Win+G`. A 30–60s capture of the
-> terminal output below is all that's needed.)*
+> **Demo recording:** *(placeholder — see "Recording your own demo GIF" below for
+> the fastest path to filling this in.)*
+
+## Example output (real, captured from an actual run)
+
+The brownfield scenario end-to-end — a genuine first-attempt test failure, a real
+bounded retry, and a real recovery, replayed deterministically against actual
+PostgreSQL:
+
+```
+=== Running 'brownfield' scenario in replay mode ===
+Workspace: /tmp/scenario_runs/brownfield
+
+--- GATE (replayed from fixture): codebase_impact_review -> approved ---
+[14:12:24] codebase_reasoner        node_start         Scanned ... for keywords ['click',
+  'analytics', 'counter', 'under', 'counts', 'concurrent']...: 9 module(s), 1 API file(s) impacted.
+[14:12:24] architecture_design      node_end           Change scoped to existing file(s):
+  app/auth.py, app/db.py, app/models.py, app/rate_limit.py, app/repository.py, and 5 more. ...
+[14:12:24] decomposer_planner       node_end           plan ready | 0ms
+[14:12:24] coder                    node_end           attempt 1: generated 1 file(s) (replay mode)
+[14:12:26] test_executor            node_start         running pytest for attempt 1
+[14:12:26] test_executor            retry              tests failed, retrying (attempt 2 of 4)
+[14:12:27] coder                    node_end           attempt 2: generated 2 file(s) (replay mode)
+[14:12:28] test_executor            node_start         running pytest for attempt 2
+[14:12:28] test_executor            node_end           tests passed | 2143ms
+
+--- GATE (replayed from fixture): merge_release_approval -> approved ---
+[14:12:28] release_gate             node_end           committed 34d6529a | 45ms
+
+=== Run finished: run_status=completed ===
+retry_count=1 rollback_count=0 safe_stop=False
+e2e_latency=2.27s
+```
+
+Full, unabridged traces for all three scenarios (including the ambiguous
+scenario's task list visibly changing from 4 tasks to "5 tasks (revised plan)" at
+its re-planning gate) are in [docs/scenarios/](docs/scenarios/) — every one
+annotated with what it demonstrates and why, not just pasted output.
+
+### Recording your own demo GIF
+
+This environment doesn't have a GUI session to capture from, so I can't produce a
+real recording — but here's the fastest path for you to do it once this is on your
+machine:
+
+1. Install **[ScreenToGif](https://www.screentogif.com/)** (Windows, free, ~5MB,
+   captures directly to GIF with no post-processing step) — or if you're on
+   Mac/Linux, `Cmd+Shift+5` (macOS built-in) or [Peek](https://github.com/phw/peek)
+   (Linux) work just as well.
+2. Run `docker compose up --build` (or `make up`, if you have `make` installed)
+   in a terminal sized to something reasonable (~100×30).
+3. Start recording, let it run to `=== All scenarios complete ===` (about 15–20s),
+   stop, export as GIF.
+4. Drop the file at `docs/demo.gif` and replace the placeholder line above with
+   `![Demo](docs/demo.gif)`.
 
 ## Quickstart (30 seconds, nothing to configure)
 
 ```bash
 git clone <this-repo>
 cd agentic-sdlc-orchestrator
-cp .env.example .env
-make up          # or: docker compose up --build
+cp .env.example .env      # PowerShell: copy .env.example .env
+docker compose up --build
 ```
 
-No login, no API key, nothing to configure. This brings up:
+No login, no API key, nothing to configure. (If you have `make` installed, `make up`
+is equivalent and shorter — see [`make help`](Makefile) for other shortcuts. Not
+required either way.)
+
+This brings up:
 
 - **postgres** — the checkpointer's durability layer and the target app's database
 - **target_app** — the URL shortener, live at `http://localhost:8000`
@@ -47,18 +102,19 @@ After the run, `postgres` and `target_app` keep running:
 curl http://localhost:8000/health
 ```
 
-Run `make help` for every available shortcut (individual scenarios, test suites,
-coverage regeneration, teardown).
+If `make` is installed, `make help` lists every shortcut (individual scenarios,
+test suites, coverage regeneration, teardown) — see the [Makefile](Makefile) for
+the equivalent raw commands either way.
 
 ## Running one scenario at a time
 
 ```bash
-make demo-greenfield
-make demo-brownfield
-make demo-ambiguous
-
-# equivalent, without make:
 docker compose run --rm orchestrator python scenarios/run_greenfield.py
+docker compose run --rm orchestrator python scenarios/run_brownfield.py
+docker compose run --rm orchestrator python scenarios/run_ambiguous.py
+
+# with make installed, these are equivalent:
+make demo-greenfield
 ```
 
 Each scenario has a companion write-up with an actual captured run and an
