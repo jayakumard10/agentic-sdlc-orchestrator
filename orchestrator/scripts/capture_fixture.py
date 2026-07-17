@@ -37,7 +37,7 @@ configure_logging()
 
 _CAPTURE_WORKSPACE_ROOT = REPO_ROOT / ".fixture_capture_workspace"
 
-# The "human" gate decisions made during this candidate's own live capture session -
+# The "human" gate decisions made during this author's own live capture session -
 # distinct from SCENARIO_REQUIREMENTS/seed files (shared with replay), since replay
 # uses the *recorded* decision from the resulting transcript, not this table.
 CAPTURE_DECISIONS: dict[str, dict[str, dict]] = {

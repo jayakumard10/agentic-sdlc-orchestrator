@@ -169,7 +169,7 @@ explanation of what it demonstrates:
 - [docs/scenarios/brownfield.md](docs/scenarios/brownfield.md) — a real bug fix with a deliberate first-attempt failure and a genuine retry
 - [docs/scenarios/ambiguous.md](docs/scenarios/ambiguous.md) — a vague requirement that triggers mid-flight re-planning
 
-## Live mode (candidate's own machine only)
+## Live mode (author's own machine only)
 
 The Coder node can call the real `claude` CLI instead of replaying fixtures. This
 requires an authenticated `claude` CLI on the **host** (not something a reviewer

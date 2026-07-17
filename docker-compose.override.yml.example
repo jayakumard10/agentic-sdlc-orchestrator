@@ -3,7 +3,7 @@
 # session into the orchestrator container so the real `claude` CLI can authenticate.
 #
 # This only works on a machine that already has an authenticated `claude` CLI
-# (i.e., practically, only the candidate's own machine) - a reviewer's machine
+# (i.e., practically, only the original author's machine) - a reviewer's machine
 # won't have this file and doesn't need it; the default docker-compose.yml replays
 # committed fixtures deterministically with no login required.
 #

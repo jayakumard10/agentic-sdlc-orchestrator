@@ -29,6 +29,5 @@ Thumbs.db
 .env
 .env.local
 
-# Candidate planning notes — derived from a confidentiality-marked assignment brief,
-# never to be committed to the public submission repo
+# Local planning/process notes — not part of the shipped system, never committed
 PLANNING.md
